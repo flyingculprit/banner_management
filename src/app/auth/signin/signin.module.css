@@ -1,0 +1,199 @@
+.container {
+  min-height: 100vh;
+  background-color: #020617;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 2.5rem 1rem;
+  color: #e2e8f0;
+}
+
+.card {
+  width: 100%;
+  max-width: 28rem;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  padding: 1.5rem;
+  border-radius: 1.25rem;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(16px);
+}
+
+@media (min-width: 640px) {
+  .card {
+    padding: 2rem;
+    border-radius: 1.5rem;
+  }
+}
+
+.adminCard {
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.logoLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  text-decoration: none;
+}
+
+.logoIcon {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background-color: #e54646;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.adminLogoIcon {
+  background-color: #d97706;
+}
+
+.logoText {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.headerText {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .title {
+    font-size: 1.5rem;
+  }
+}
+
+.subtitle {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+
+.errorBanner {
+  margin-bottom: 1.25rem;
+  padding: 0.875rem;
+  border-radius: 0.75rem;
+  background-color: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  color: #fda4af;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #94a3b8;
+  margin-bottom: 0.375rem;
+}
+
+.inputWrapper {
+  position: relative;
+}
+
+.inputIcon {
+  position: absolute;
+  left: 0.875rem;
+  top: 0.75rem;
+  width: 1rem;
+  height: 1rem;
+  color: #64748b;
+}
+
+.input {
+  width: 100%;
+  padding: 0.625rem 1rem 0.625rem 2.5rem;
+  background-color: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  color: #ffffff;
+  outline: none;
+}
+
+.input:focus {
+  border-color: #6366f1;
+}
+
+.submitBtn {
+  width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background: linear-gradient(to right, #4f46e5, #06b6d4);
+  border: none;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 0.875rem;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.adminSubmitBtn {
+  background: #d97706;
+}
+
+.adminSubmitBtn:hover {
+  background-color: #b45309;
+}
+
+.footerLinks {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.linkHighlight {
+  color: #818cf8;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.linkHighlight:hover {
+  text-decoration: underline;
+}
+
+.switchPortalLink {
+  color: #64748b;
+  text-decoration: underline;
+  font-size: 0.6875rem;
+}
