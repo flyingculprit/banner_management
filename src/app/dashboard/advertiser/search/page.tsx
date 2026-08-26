@@ -3,8 +3,19 @@
 import { useState, useEffect } from 'react';
 import Script from 'next/script';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
-import { Search, Sparkles, MapPin, CreditCard, Loader2, X } from 'lucide-react';
+import styles from './search.module.css';
+import { 
+  ArrowLeft, 
+  MapPin, 
+  Sparkles, 
+  CheckCircle2, 
+  Loader2, 
+  Upload, 
+  X,
+  CreditCard
+} from 'lucide-react';
 
 declare global {
   interface Window {
@@ -12,14 +23,14 @@ declare global {
   }
 }
 
-export default function AdvertiserExplorerPage() {
+export default function SearchBoardsPage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [spaces, setSpaces] = useState<any[]>([]);
   const [filteredSpaces, setFilteredSpaces] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filters
+  // Search Filters
   const [searchDistrict, setSearchDistrict] = useState('');
   const [searchArea, setSearchArea] = useState('');
   const [maxBudget, setMaxBudget] = useState('');
@@ -30,6 +41,8 @@ export default function AdvertiserExplorerPage() {
   const [durationMonths, setDurationMonths] = useState('1');
   const [bannerFile, setBannerFile] = useState<File | null>(null);
   const [bannerPreview, setBannerPreview] = useState<string | null>(null);
+
+  // AI Verification State
   const [aiVerifying, setAiVerifying] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   const [bookingLoading, setBookingLoading] = useState(false);
@@ -39,35 +52,37 @@ export default function AdvertiserExplorerPage() {
       if (!user) router.push('/auth/signin');
       else {
         setUser(user);
-        fetchSpaces();
+        fetchAvailableSpaces();
       }
     });
   }, [router]);
 
-  const fetchSpaces = async () => {
+  const fetchAvailableSpaces = async () => {
     setLoading(true);
-    // Fetch ALL approved spaces (both rented and available)
-    const { data } = await supabase
+    // Fetch only approved and non-rented boards
+    const { data, error } = await supabase
       .from('spaces')
       .select('*')
       .eq('status', 'approved')
+      .eq('is_rented', false)
       .order('location_score', { ascending: false });
 
-    if (data) {
+    if (!error && data) {
       setSpaces(data);
       setFilteredSpaces(data);
     }
     setLoading(false);
   };
 
+  // Filter Search
   useEffect(() => {
     let result = [...spaces];
     if (searchDistrict) {
       result = result.filter((s) => s.district?.toLowerCase().includes(searchDistrict.toLowerCase()));
     }
     if (searchArea) {
-      result = result.filter((s) =>
-        s.area?.toLowerCase().includes(searchArea.toLowerCase()) ||
+      result = result.filter((s) => 
+        s.area?.toLowerCase().includes(searchArea.toLowerCase()) || 
         s.city?.toLowerCase().includes(searchArea.toLowerCase()) ||
         s.landmark?.toLowerCase().includes(searchArea.toLowerCase())
       );
@@ -78,6 +93,7 @@ export default function AdvertiserExplorerPage() {
     setFilteredSpaces(result);
   }, [searchDistrict, searchArea, maxBudget, spaces]);
 
+  // Handle Banner Image Picker
   const handleBannerSelect = (file: File) => {
     setBannerFile(file);
     const reader = new FileReader();
@@ -85,6 +101,7 @@ export default function AdvertiserExplorerPage() {
     reader.readAsDataURL(file);
   };
 
+  // Run AI Verification on uploaded banner
   const runAiBannerVerification = async () => {
     if (!bannerPreview || !selectedSpace) return;
     setAiVerifying(true);
@@ -93,7 +110,7 @@ export default function AdvertiserExplorerPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          campaignName: campaignName || 'Billboard Campaign',
+          campaignName: campaignName || 'New Launch Campaign',
           flexWidth: selectedSpace.width,
           flexHeight: selectedSpace.height,
           base64Image: bannerPreview,
@@ -103,15 +120,16 @@ export default function AdvertiserExplorerPage() {
       if (!res.ok) throw new Error(data.error);
       setAiResult(data);
     } catch (err: any) {
-      alert('AI Verification error: ' + err.message);
+      alert('AI Verification failed: ' + err.message);
     } finally {
       setAiVerifying(false);
     }
   };
 
+  // Razorpay Checkout Execution
   const handleRazorpayPayment = async () => {
     if (!bannerFile || !user || !selectedSpace) {
-      alert('Please upload an ad banner file.');
+      alert('Please upload an ad banner file');
       return;
     }
 
@@ -119,9 +137,10 @@ export default function AdvertiserExplorerPage() {
 
     try {
       const totalAmount = Number(selectedSpace.monthly_rate) * Number(durationMonths);
-      const platformCommission = totalAmount * 0.1;
+      const platformCommission = totalAmount * 0.10; // 10% platform fee
       const ownerAmount = totalAmount - platformCommission;
 
+      // 1. Create Razorpay Order
       const orderRes = await fetch('/api/razorpay/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -134,6 +153,7 @@ export default function AdvertiserExplorerPage() {
       const orderData = await orderRes.json();
       if (!orderRes.ok) throw new Error(orderData.error);
 
+      // 2. Upload Ad Banner to Supabase
       const fileExt = bannerFile.name.split('.').pop();
       const fileName = `ad_${user.id}_${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
@@ -146,6 +166,9 @@ export default function AdvertiserExplorerPage() {
         .from('banners')
         .getPublicUrl(fileName);
 
+      const bannerPhotoUrl = publicData.publicUrl;
+
+      // 3. Open Razorpay Gateway Modal
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
@@ -154,6 +177,7 @@ export default function AdvertiserExplorerPage() {
         description: `Booking flex: ${selectedSpace.area}, ${selectedSpace.city}`,
         order_id: orderData.id,
         handler: async function (response: any) {
+          // 4. Save Booking & Update Space State
           const startDate = new Date();
           const endDate = new Date();
           endDate.setMonth(endDate.getMonth() + Number(durationMonths));
@@ -168,7 +192,7 @@ export default function AdvertiserExplorerPage() {
             total_amount: totalAmount,
             platform_commission: platformCommission,
             owner_amount: ownerAmount,
-            banner_photo_url: publicData.publicUrl,
+            banner_photo_url: bannerPhotoUrl,
             ai_content_score: aiResult?.contentScore || 90,
             ai_verification_details: aiResult || null,
             ad_approval_status: 'approved',
@@ -181,10 +205,14 @@ export default function AdvertiserExplorerPage() {
 
           if (bookingErr) throw bookingErr;
 
-          await supabase.from('spaces').update({ is_rented: true }).eq('id', selectedSpace.id);
+          // Set space to rented
+          await supabase
+            .from('spaces')
+            .update({ is_rented: true })
+            .eq('id', selectedSpace.id);
 
-          alert('Payment Successful! Billboard booked.');
-          router.push('/dashboard/advertiser/banners');
+          alert('Payment Successful & Billboard space booked!');
+          router.push('/dashboard/advertiser');
         },
         prefill: {
           name: user.user_metadata?.full_name || 'Advertiser',
@@ -196,7 +224,7 @@ export default function AdvertiserExplorerPage() {
       const paymentObject = new window.Razorpay(options);
       paymentObject.open();
     } catch (err: any) {
-      alert('Payment error: ' + err.message);
+      alert('Payment initialization error: ' + err.message);
     } finally {
       setBookingLoading(false);
     }
@@ -205,125 +233,130 @@ export default function AdvertiserExplorerPage() {
   return (
     <>
       <Script src="https://checkout.razorpay.com/v1/checkout.js" />
-      <div>
-        <h1 className="text-2xl font-bold text-white mb-2">Explore Outdoor Flex Billboard Spaces</h1>
-        <p className="text-xs text-slate-400 mb-6">Browse verified locations across districts with Gemini AI location intelligence.</p>
-
-        {/* Filter Card */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl mb-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <input
-            type="text"
-            placeholder="Search District (e.g. Karur)"
-            value={searchDistrict}
-            onChange={(e) => setSearchDistrict(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
-          <input
-            type="text"
-            placeholder="Search Area / Landmark (Bus Stand, Roundabout...)"
-            value={searchArea}
-            onChange={(e) => setSearchArea(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
-          <input
-            type="number"
-            placeholder="Max Monthly Rate (₹)"
-            value={maxBudget}
-            onChange={(e) => setMaxBudget(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
-        </div>
-
-        {/* Boards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {loading ? (
-            <div className="col-span-full py-16 flex items-center justify-center gap-2 text-slate-500 text-xs">
-              <Loader2 className="w-4 h-4 animate-spin text-indigo-500" /> Loading available spaces...
+      <div className={styles.container}>
+        <div className={styles.inner}>
+          <div className={styles.topBar}>
+            <div>
+              <Link href="/dashboard/advertiser" className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white mb-2">
+                <ArrowLeft className="w-4 h-4" /> Back to Advertiser Hub
+              </Link>
+              <h1 className={styles.title}>Find & Rent Billboard Spaces</h1>
+              <p className={styles.subtitle}>Discover verified hoardings ranked by Gemini AI Location Scores[cite: 1].</p>
             </div>
-          ) : filteredSpaces.length === 0 ? (
-            <div className="col-span-full py-12 text-center bg-slate-900/50 rounded-2xl border border-slate-800 text-slate-400 text-xs">
-              No billboard boards match your filters.
+          </div>
+
+          {/* Search & Filter Card */}
+          <div className={styles.filterCard}>
+            <div className={styles.inputGroup}>
+              <label className={styles.label}>District</label>
+              <input
+                type="text"
+                placeholder="e.g. Karur"
+                value={searchDistrict}
+                onChange={(e) => setSearchDistrict(e.target.value)}
+                className={styles.input}
+              />
             </div>
-          ) : (
-            filteredSpaces.map((space) => (
-              <div key={space.id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col justify-between">
-                <div className="h-44 bg-slate-950 relative">
-                  {space.space_photo_url ? (
-                    <img src={space.space_photo_url} alt={space.area} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xs text-slate-600">No Image Available</div>
-                  )}
+            <div className={styles.inputGroup}>
+              <label className={styles.label}>Area / Landmark / Junction</label>
+              <input
+                type="text"
+                placeholder="Bus stand, Roundabout, Highway..."
+                value={searchArea}
+                onChange={(e) => setSearchArea(e.target.value)}
+                className={styles.input}
+              />
+            </div>
+            <div className={styles.inputGroup}>
+              <label className={styles.label}>Max Monthly Budget (₹)</label>
+              <input
+                type="number"
+                placeholder="e.g. 25000"
+                value={maxBudget}
+                onChange={(e) => setMaxBudget(e.target.value)}
+                className={styles.input}
+              />
+            </div>
+          </div>
 
-                  <div className="absolute top-3 right-3 flex items-center gap-1.5">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                      <Sparkles className="w-3 h-3 inline mr-1" /> Score {space.location_score || 85}/100[cite: 1]
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <h3 className="font-bold text-white text-base">{space.area}, {space.city}</h3>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                        space.is_rented ? 'bg-amber-500/15 text-amber-400' : 'bg-emerald-500/15 text-emerald-400'
-                      }`}>
-                        {space.is_rented ? 'Already Rented' : 'Available'}
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-slate-400 line-clamp-1">{space.address}</p>
-
-                    <div className="grid grid-cols-2 gap-2 mt-4 text-xs">
-                      <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Dimensions</span>
-                        <span className="text-slate-200 font-semibold">{space.width} × {space.height} ft</span>
-                      </div>
-                      <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Visibility</span>
-                        <span className="text-slate-200 font-semibold">{space.road_visibility}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-baseline justify-between">
-                      <span className="text-lg font-extrabold text-cyan-400">
-                        ₹{Number(space.monthly_rate).toLocaleString()} <span className="text-xs text-slate-400 font-normal">/ month</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 pt-4 border-t border-slate-800">
-                    {space.is_rented ? (
-                      <button disabled className="w-full py-2.5 bg-slate-800 text-slate-500 rounded-xl text-xs font-semibold cursor-not-allowed">
-                        Currently Occupied / Unavailable
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setSelectedSpace(space);
-                          setAiResult(null);
-                          setBannerFile(null);
-                          setBannerPreview(null);
-                        }}
-                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition"
-                      >
-                        Book This Space →
-                      </button>
-                    )}
-                  </div>
-                </div>
+          {/* Boards Grid */}
+          <div className={styles.boardsGrid}>
+            {loading ? (
+              <div className="col-span-3 text-center py-12 text-slate-400 flex items-center justify-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin text-indigo-500" /> Loading available spaces...
               </div>
-            ))
-          )}
+            ) : filteredSpaces.length === 0 ? (
+              <div className="col-span-3 text-center py-12 text-slate-500 bg-slate-900/50 rounded-2xl border border-slate-800">
+                No verified billboard boards matching your criteria.
+              </div>
+            ) : (
+              filteredSpaces.map((space) => (
+                <div key={space.id} className={styles.boardCard}>
+                  <div className={styles.imageWrapper}>
+                    {space.space_photo_url ? (
+                      <img src={space.space_photo_url} alt={space.area} className={styles.boardImg} />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-slate-600">No Image</div>
+                    )}
+                    <div className="absolute top-3 right-3">
+                      <span className={styles.scoreBadge}>
+                        <Sparkles className="w-3 h-3" /> Score {space.location_score || 85}/100[cite: 1]
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className={styles.boardContent}>
+                    <div>
+                      <h3 className="font-bold text-base text-white">{space.area}, {space.city}</h3>
+                      <p className="text-xs text-slate-400 mt-0.5">{space.address}</p>
+
+                      <div className="grid grid-cols-2 gap-2 mt-4 text-xs">
+                        <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                          <span className="text-slate-500 block">Flex Dimensions</span>
+                          <span className="text-slate-200 font-semibold">{space.width} × {space.height} ft</span>
+                        </div>
+                        <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                          <span className="text-slate-500 block">Visibility</span>
+                          <span className="text-slate-200 font-semibold">{space.road_visibility}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-baseline justify-between">
+                        <div>
+                          <span className="text-xl font-extrabold text-cyan-400">₹{Number(space.monthly_rate).toLocaleString()}</span>
+                          <span className="text-xs text-slate-400"> / month</span>
+                        </div>
+                        {space.lighting && (
+                          <span className="text-[11px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded">Night Lit</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setSelectedSpace(space);
+                        setAiResult(null);
+                        setBannerFile(null);
+                        setBannerPreview(null);
+                      }}
+                      className={styles.bookBtn}
+                    >
+                      Book Flex Board →
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
-        {/* Booking Modal */}
+        {/* Booking & AI Check Modal */}
         {selectedSpace && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className={styles.modalOverlay}>
+            <div className={styles.modalBox}>
               <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
                 <div>
-                  <h3 className="font-bold text-white text-base">Book Billboard</h3>
+                  <h3 className="font-bold text-lg text-white">Book Flex Space</h3>
                   <p className="text-xs text-slate-400">{selectedSpace.area}, {selectedSpace.city} ({selectedSpace.width} × {selectedSpace.height} ft)</p>
                 </div>
                 <button onClick={() => setSelectedSpace(null)} className="text-slate-400 hover:text-white">
@@ -331,25 +364,25 @@ export default function AdvertiserExplorerPage() {
                 </button>
               </div>
 
-              <div className="space-y-3.5 text-xs">
+              <div className="space-y-4">
                 <div>
-                  <label className="text-slate-400 block mb-1">Campaign Name</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Campaign Title</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Festival Promotional Campaign"
+                    placeholder="e.g. Summer Electronics Sale"
                     value={campaignName}
                     onChange={(e) => setCampaignName(e.target.value)}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white"
+                    className={styles.input}
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">Rental Duration</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Duration (Months)</label>
                   <select
                     value={durationMonths}
                     onChange={(e) => setDurationMonths(e.target.value)}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white"
+                    className={styles.input}
                   >
                     <option value="1">1 Month (₹{Number(selectedSpace.monthly_rate).toLocaleString()})</option>
                     <option value="2">2 Months (₹{(Number(selectedSpace.monthly_rate) * 2).toLocaleString()})</option>
@@ -359,20 +392,21 @@ export default function AdvertiserExplorerPage() {
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1">Upload Ad Banner Creative</label>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">Upload Ad Banner / Creative</label>
                   <input
                     type="file"
                     accept="image/*"
                     onChange={(e) => e.target.files?.[0] && handleBannerSelect(e.target.files[0])}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-300"
+                    className={styles.input}
                   />
                 </div>
 
+                {/* AI Banner Verification Widget[cite: 1] */}
                 {bannerPreview && (
-                  <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-2">
+                  <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-indigo-300 flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Verification[cite: 1]
+                      <span className="text-xs font-semibold text-indigo-300 flex items-center gap-1">
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Inspector[cite: 1]
                       </span>
                       <button
                         type="button"
@@ -385,7 +419,7 @@ export default function AdvertiserExplorerPage() {
                     </div>
 
                     {aiResult && (
-                      <div className="text-xs space-y-1 pt-2 border-t border-indigo-900/60">
+                      <div className="text-xs space-y-1.5 pt-2 border-t border-indigo-900/60">
                         <div className="flex justify-between">
                           <span className="text-slate-400">Content Score:</span>
                           <span className="font-bold text-cyan-400">{aiResult.contentScore}/100</span>
@@ -394,18 +428,27 @@ export default function AdvertiserExplorerPage() {
                           <span className="text-slate-400">Quality:</span>
                           <span className="text-emerald-400 font-medium">{aiResult.imageQuality}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 italic">{aiResult.remarks}</p>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400">Dimension Match:</span>
+                          <span className="text-slate-200">{aiResult.dimensionCheck}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-1 italic">{aiResult.remarks}</p>
                       </div>
                     )}
                   </div>
                 )}
 
-                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
+                {/* Total Price Summary[cite: 1] */}
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
                   <div className="flex justify-between text-slate-400">
-                    <span>Rent Total:</span>
+                    <span>Base Rent ({durationMonths} Mo):</span>
                     <span>₹{(Number(selectedSpace.monthly_rate) * Number(durationMonths)).toLocaleString()}</span>
                   </div>
-                  <div className="flex justify-between text-white font-bold pt-1 border-t border-slate-800">
+                  <div className="flex justify-between text-slate-400">
+                    <span>Platform Service Fee:</span>
+                    <span>Included</span>
+                  </div>
+                  <div className="flex justify-between text-white font-bold text-sm pt-2 border-t border-slate-800">
                     <span>Total Amount Payable:</span>
                     <span className="text-emerald-400">₹{(Number(selectedSpace.monthly_rate) * Number(durationMonths)).toLocaleString()}</span>
                   </div>
@@ -415,9 +458,15 @@ export default function AdvertiserExplorerPage() {
                   type="button"
                   disabled={bookingLoading}
                   onClick={handleRazorpayPayment}
-                  className="w-full py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-semibold rounded-xl flex items-center justify-center gap-2"
+                  className="w-full py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-semibold text-sm rounded-xl flex items-center justify-center gap-2 shadow-lg"
                 >
-                  {bookingLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CreditCard className="w-4 h-4" /> Pay with Razorpay & Confirm</>}
+                  {bookingLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <CreditCard className="w-4 h-4" /> Pay with Razorpay & Confirm Booking[cite: 1]
+                    </>
+                  )}
                 </button>
               </div>
             </div>
