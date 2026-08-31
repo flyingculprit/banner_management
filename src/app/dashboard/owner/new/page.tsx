@@ -59,7 +59,7 @@ export default function NewBoardPage() {
 
     setValuing(true);
     try {
-      const res = await fetch('/api/valuation', {
+      const res = await fetch('/api/ai/analyze-location', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ area, city, width, height, trafficDensity }),

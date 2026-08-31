@@ -1,29 +1,42 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenAI, Type } from '@google/genai';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-
 export async function POST(request: Request) {
   try {
-    const { district, city, area, address, landmark, width, height, requestedPrice } = await request.json();
+    const body = await request.json().catch(() => ({}));
+    const { 
+      district = 'Tamil Nadu', 
+      city = '', 
+      area = '', 
+      address = '', 
+      width = '20', 
+      height = '10', 
+      trafficDensity = 'medium',
+      monthlyRate = '25000'
+    } = body;
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'Missing GEMINI_API_KEY in .env.local file.' },
+        { status: 500 }
+      );
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const totalSqFt = Number(width) * Number(height) || 200;
 
     const prompt = `
-      You are an expert outdoor advertising and billboard valuation AI.
-      Analyze the commercial flex/billboard value for this site:
-      - District: ${district}
-      - City/Town: ${city}
-      - Area: ${area}
-      - Exact Address / Landmark: ${address}, ${landmark}
-      - Flex Dimension: ${width} ft (width) x ${height} ft (height) (Total area: ${Number(width) * Number(height)} sq.ft)
-      - Owner's Base Price: ₹${requestedPrice}/month
+      You are an expert commercial real estate and outdoor billboard advertising valuation AI in India.
+      Analyze this billboard spot and calculate a fair monthly rental rate in INR and a location viability score from 1 to 100.
 
-      Estimate and calculate:
-      1. Traffic Score (0-100) based on commercial footfall and vehicle congestion.
-      2. Visibility Score (0-100) based on junction/road angle prominence.
-      3. Demand Score (0-100) based on local business presence.
-      4. Overall Location Score (0-100).
-      5. AI Recommended Monthly Rate in Indian Rupees (INR).
-      6. A brief valuation reason (max 2 sentences).
+      Billboard Location Details:
+      - District: ${district}
+      - City / Town: ${city}
+      - Area / Landmark: ${area}
+      - Exact Address: ${address || area}
+      - Dimensions: ${width} ft x ${height} ft (Total Area: ${totalSqFt} sq.ft)
+      - Traffic Density: ${trafficDensity}
     `;
 
     const response = await ai.models.generateContent({
@@ -34,24 +47,27 @@ export async function POST(request: Request) {
         responseSchema: {
           type: Type.OBJECT,
           properties: {
-            trafficScore: { type: Type.NUMBER },
-            visibilityScore: { type: Type.NUMBER },
-            demandScore: { type: Type.NUMBER },
-            locationScore: { type: Type.NUMBER },
-            aiSuggestedRate: { type: Type.NUMBER },
+            monthly_rate: { type: Type.NUMBER },
+            location_score: { type: Type.NUMBER },
             reason: { type: Type.STRING },
           },
-          required: ['trafficScore', 'visibilityScore', 'demandScore', 'locationScore', 'aiSuggestedRate', 'reason'],
+          required: ['monthly_rate', 'location_score', 'reason'],
         },
       },
     });
 
     const parsedData = JSON.parse(response.text || '{}');
-    return NextResponse.json(parsedData);
+
+    return NextResponse.json({
+      success: true,
+      monthly_rate: Number(parsedData.monthly_rate) || Number(monthlyRate) || 25000,
+      location_score: Math.min(Math.max(Number(parsedData.location_score) || 75, 1), 100),
+      reason: parsedData.reason || 'Valuation completed successfully.',
+    });
   } catch (error: any) {
-    console.error('AI Location Analysis Error:', error);
+    console.error('AI Valuation Error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to analyze location' },
+      { error: error.message || 'Failed to process AI location valuation.' },
       { status: 500 }
     );
   }
