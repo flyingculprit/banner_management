@@ -70,11 +70,37 @@ export default function SearchBoardsPage() {
         fetchAvailableSpaces();
       }
     });
+
+    // Realtime subscription: Remove space immediately if deleted by owner or updated
+    const channel = supabase
+      .channel('advertiser-spaces-changes')
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'spaces' },
+        (payload) => {
+          setSpaces((prev) => prev.filter((s) => s.id !== payload.old.id));
+          setFilteredSpaces((prev) => prev.filter((s) => s.id !== payload.old.id));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'spaces' },
+        (payload: any) => {
+          if (payload.new.status !== 'approved' || payload.new.is_rented) {
+            setSpaces((prev) => prev.filter((s) => s.id !== payload.new.id));
+            setFilteredSpaces((prev) => prev.filter((s) => s.id !== payload.new.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [router]);
 
   const fetchAvailableSpaces = async () => {
     setLoading(true);
-    // Fetch only approved and non-rented boards
     const { data, error } = await supabase
       .from('spaces')
       .select('*')
@@ -108,7 +134,6 @@ export default function SearchBoardsPage() {
     setFilteredSpaces(result);
   }, [searchDistrict, searchArea, maxBudget, spaces]);
 
-  // Handle Banner Image Picker
   const handleBannerSelect = (file: File) => {
     setBannerFile(file);
     const reader = new FileReader();
@@ -116,7 +141,6 @@ export default function SearchBoardsPage() {
     reader.readAsDataURL(file);
   };
 
-  // Run AI Verification on uploaded banner
   const runAiBannerVerification = async () => {
     if (!bannerPreview || !selectedSpace) return;
     setAiVerifying(true);
@@ -146,7 +170,6 @@ export default function SearchBoardsPage() {
     }
   };
 
-  // Razorpay Checkout Execution
   const handleRazorpayPayment = async () => {
     if (!bannerFile || !user || !selectedSpace) {
       setPopup({
@@ -162,10 +185,9 @@ export default function SearchBoardsPage() {
 
     try {
       const totalAmount = Number(selectedSpace.monthly_rate) * Number(durationMonths);
-      const platformCommission = totalAmount * 0.10; // 10% platform fee
+      const platformCommission = totalAmount * 0.10;
       const ownerAmount = totalAmount - platformCommission;
 
-      // 1. Create Razorpay Order
       const orderRes = await fetch('/api/razorpay/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -178,7 +200,6 @@ export default function SearchBoardsPage() {
       const orderData = await orderRes.json();
       if (!orderRes.ok) throw new Error(orderData.error);
 
-      // 2. Upload Ad Banner to Supabase
       const fileExt = bannerFile.name.split('.').pop();
       const fileName = `ad_${user.id}_${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
@@ -193,7 +214,6 @@ export default function SearchBoardsPage() {
 
       const bannerPhotoUrl = publicData.publicUrl;
 
-      // 3. Open Razorpay Gateway Modal
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
@@ -202,7 +222,6 @@ export default function SearchBoardsPage() {
         description: `Booking flex: ${selectedSpace.area}, ${selectedSpace.city}`,
         order_id: orderData.id,
         handler: async function (response: any) {
-          // 4. Save Booking & Update Space State
           const startDate = new Date();
           const endDate = new Date();
           endDate.setMonth(endDate.getMonth() + Number(durationMonths));
@@ -230,7 +249,6 @@ export default function SearchBoardsPage() {
 
           if (bookingErr) throw bookingErr;
 
-          // Set space to rented
           await supabase
             .from('spaces')
             .update({ is_rented: true })
@@ -437,7 +455,6 @@ export default function SearchBoardsPage() {
                   />
                 </div>
 
-                {/* AI Banner Verification Widget */}
                 {bannerPreview && (
                   <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-3">
                     <div className="flex items-center justify-between">
@@ -474,7 +491,6 @@ export default function SearchBoardsPage() {
                   </div>
                 )}
 
-                {/* Total Price Summary */}
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
                   <div className="flex justify-between text-slate-400">
                     <span>Base Rent ({durationMonths} Mo):</span>
@@ -509,7 +525,6 @@ export default function SearchBoardsPage() {
           </div>
         )}
 
-        {/* Custom Status Modal for Notifications & Confirmations */}
         <StatusModal
           isOpen={popup.isOpen}
           type={popup.type}

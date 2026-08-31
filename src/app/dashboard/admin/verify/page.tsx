@@ -60,6 +60,29 @@ export default function AdminVerifyPage() {
 
   useEffect(() => {
     fetchSpaces();
+
+    // Realtime subscription: Remove deleted spaces and re-fetch changes immediately
+    const channel = supabase
+      .channel('admin-spaces-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'spaces' },
+        (payload) => {
+          setSpaces((prev) => prev.filter((space) => space.id !== payload.old.id));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'spaces' },
+        () => {
+          fetchSpaces();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchSpaces]);
 
   const confirmStatusChange = (spaceId: string, status: 'approved' | 'rejected', areaName: string) => {

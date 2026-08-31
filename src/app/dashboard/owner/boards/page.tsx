@@ -4,12 +4,28 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import SpaceChatModal from '@/components/SpaceChatModal';
 import EditSpaceModal from '@/components/EditSpaceModal';
-import { Edit, MessageSquare, ShieldCheck, User, Loader2 } from 'lucide-react';
+import StatusModal from '@/components/StatusModal';
+import { Edit, MessageSquare, ShieldCheck, User, Loader2, Trash2 } from 'lucide-react';
 
 export default function OwnerBoardsPage() {
   const [spaces, setSpaces] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // StatusModal State for Delete Confirmation and Alerts
+  const [popup, setPopup] = useState<{
+    isOpen: boolean;
+    type: 'success' | 'error' | 'warning' | 'info';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: '',
+  });
 
   // Chat Modal State
   const [chatConfig, setChatConfig] = useState<{
@@ -80,10 +96,62 @@ export default function OwnerBoardsPage() {
     return () => subscription.unsubscribe();
   }, [fetchSpaces]);
 
+  // Delete Space Confirmation
+  const confirmDeleteSpace = (space: any) => {
+    if (space.is_rented) {
+      setPopup({
+        isOpen: true,
+        type: 'warning',
+        title: 'Active Rental Warning',
+        message: 'This billboard is currently rented. Are you sure you want to permanently delete this space listing?',
+        onConfirm: () => executeDeleteSpace(space.id),
+      });
+      return;
+    }
+
+    setPopup({
+      isOpen: true,
+      type: 'warning',
+      title: 'Delete Billboard',
+      message: `Are you sure you want to permanently delete the space at ${space.area}, ${space.city}? This cannot be undone.`,
+      onConfirm: () => executeDeleteSpace(space.id),
+    });
+  };
+
+  // Delete Execution
+  const executeDeleteSpace = async (spaceId: string) => {
+    setDeletingId(spaceId);
+    try {
+      const { error } = await supabase
+        .from('spaces')
+        .delete()
+        .eq('id', spaceId);
+
+      if (error) throw error;
+
+      setSpaces((prev) => prev.filter((s) => s.id !== spaceId));
+      setPopup({
+        isOpen: true,
+        type: 'success',
+        title: 'Billboard Deleted',
+        message: 'The billboard space has been successfully removed.',
+      });
+    } catch (err: any) {
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'Deletion Failed',
+        message: err.message || 'Unable to delete the billboard space. Check database permissions.',
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-2">My Registered Billboard Boards</h1>
-      <p className="text-xs text-slate-400 mb-6">Review board verifications, update parameters with AI, and chat with Admin or active Advertisers.</p>
+      <p className="text-xs text-slate-400 mb-6">Review board verifications, update parameters with AI, manage listings, and chat with Admin or active Advertisers.</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {loading ? (
@@ -139,15 +207,29 @@ export default function OwnerBoardsPage() {
                 </div>
 
                 <div className="mt-5 pt-4 border-t border-slate-800 space-y-2">
-                  <button
-                    onClick={() => setEditingSpace(space)}
-                    className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
-                  >
-                    <Edit className="w-3.5 h-3.5" /> Edit Board (Full Setup)
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setEditingSpace(space)}
+                      className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                    >
+                      <Edit className="w-3.5 h-3.5" /> Edit Board
+                    </button>
+
+                    {/* Delete Button */}
+                    <button
+                      type="button"
+                      disabled={deletingId === space.id}
+                      onClick={() => confirmDeleteSpace(space)}
+                      className="px-3 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-semibold flex items-center justify-center gap-1 transition disabled:opacity-50"
+                      title="Delete Billboard"
+                    >
+                      {deletingId === space.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      Delete
+                    </button>
+                  </div>
 
                   <div className="flex gap-2">
-                    {/* 1. Admin Verification Chat (Always Available) */}
+                    {/* Admin Verification Chat */}
                     <button
                       onClick={() =>
                         setChatConfig({
@@ -165,7 +247,7 @@ export default function OwnerBoardsPage() {
                       )}
                     </button>
 
-                    {/* 2. Tenant Advertiser Chat (Shows ONLY IF RENTED) */}
+                    {/* Tenant Advertiser Chat */}
                     {space.is_rented && activeBooking ? (
                       <button
                         onClick={() =>
@@ -217,6 +299,16 @@ export default function OwnerBoardsPage() {
           }}
         />
       )}
+
+      {/* Confirmation & Status Modal */}
+      <StatusModal
+        isOpen={popup.isOpen}
+        type={popup.type}
+        title={popup.title}
+        message={popup.message}
+        onConfirm={popup.onConfirm}
+        onClose={() => setPopup((prev) => ({ ...prev, isOpen: false }))}
+      />
     </div>
   );
 }

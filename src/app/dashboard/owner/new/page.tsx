@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
 import StatusModal from '@/components/StatusModal';
-import { Sparkles, Upload, Loader2, ArrowLeft, CheckCircle2, IndianRupee, Layers } from 'lucide-react';
+import { Sparkles, Upload, Loader2, ArrowLeft, CheckCircle2, Layers } from 'lucide-react';
 
 export default function NewBoardPage() {
   const router = useRouter();
@@ -15,6 +15,7 @@ export default function NewBoardPage() {
   // Form State
   const [area, setArea] = useState('');
   const [city, setCity] = useState('');
+  const [district, setDistrict] = useState('');
   const [address, setAddress] = useState('');
   const [mapLink, setMapLink] = useState('');
   const [width, setWidth] = useState('20');
@@ -110,15 +111,16 @@ export default function NewBoardPage() {
         }
       }
 
+      // Payload handles district fallback to prevent NOT-NULL constraint error
       const { error: insertError } = await supabase.from('spaces').insert({
         owner_id: user.id,
-        area,
-        city,
-        address,
+        area: area.trim(),
+        city: city.trim(),
+        district: district.trim() || city.trim() || 'General',
+        address: address.trim(),
         map_link: mapLink,
         width: Number(width),
         height: Number(height),
-        traffic_density: trafficDensity,
         monthly_rate: Number(monthlyRate),
         location_score: locationScore,
         space_photo_url: spacePhotoUrl,
@@ -128,7 +130,6 @@ export default function NewBoardPage() {
 
       if (insertError) throw insertError;
 
-      // Trigger the animated creation modal
       setCreatedBoard({
         area,
         city,
@@ -163,7 +164,7 @@ export default function NewBoardPage() {
         <p className="text-xs text-slate-400 mt-1 mb-6">Provide board specifications to calculate valuation and list for verification.</p>
 
         <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="text-slate-400 block mb-1">Area / Landmark</label>
               <input
@@ -183,6 +184,17 @@ export default function NewBoardPage() {
                 placeholder="e.g. Karur"
                 value={city}
                 onChange={(e) => setCity(e.target.value)}
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="text-slate-400 block mb-1">District</label>
+              <input
+                type="text"
+                required
+                placeholder="e.g. Karur"
+                value={district}
+                onChange={(e) => setDistrict(e.target.value)}
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white outline-none focus:border-indigo-500"
               />
             </div>
@@ -303,7 +315,7 @@ export default function NewBoardPage() {
         </form>
       </div>
 
-      {/* Dedicated Upload Success Popup Modal */}
+      {/* Upload Success Modal */}
       {createdBoard && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl animate-in zoom-in-95 duration-200">
