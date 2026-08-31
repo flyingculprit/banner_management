@@ -5,6 +5,7 @@ import Script from 'next/script';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
+import StatusModal from '@/components/StatusModal';
 import styles from './search.module.css';
 import { 
   ArrowLeft, 
@@ -46,6 +47,20 @@ export default function SearchBoardsPage() {
   const [aiVerifying, setAiVerifying] = useState(false);
   const [aiResult, setAiResult] = useState<any>(null);
   const [bookingLoading, setBookingLoading] = useState(false);
+
+  // StatusModal State
+  const [popup, setPopup] = useState<{
+    isOpen: boolean;
+    type: 'success' | 'error' | 'warning' | 'info';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: '',
+  });
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -120,7 +135,12 @@ export default function SearchBoardsPage() {
       if (!res.ok) throw new Error(data.error);
       setAiResult(data);
     } catch (err: any) {
-      alert('AI Verification failed: ' + err.message);
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'AI Verification Failed',
+        message: err.message || 'Could not verify banner creative.',
+      });
     } finally {
       setAiVerifying(false);
     }
@@ -129,7 +149,12 @@ export default function SearchBoardsPage() {
   // Razorpay Checkout Execution
   const handleRazorpayPayment = async () => {
     if (!bannerFile || !user || !selectedSpace) {
-      alert('Please upload an ad banner file');
+      setPopup({
+        isOpen: true,
+        type: 'warning',
+        title: 'Banner Required',
+        message: 'Please upload an ad banner file before continuing.',
+      });
       return;
     }
 
@@ -211,8 +236,14 @@ export default function SearchBoardsPage() {
             .update({ is_rented: true })
             .eq('id', selectedSpace.id);
 
-          alert('Payment Successful & Billboard space booked!');
-          router.push('/dashboard/advertiser');
+          setSelectedSpace(null);
+          setPopup({
+            isOpen: true,
+            type: 'success',
+            title: 'Payment Successful',
+            message: 'Your billboard space has been successfully booked and activated!',
+            onConfirm: () => router.push('/dashboard/advertiser'),
+          });
         },
         prefill: {
           name: user.user_metadata?.full_name || 'Advertiser',
@@ -224,7 +255,12 @@ export default function SearchBoardsPage() {
       const paymentObject = new window.Razorpay(options);
       paymentObject.open();
     } catch (err: any) {
-      alert('Payment initialization error: ' + err.message);
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'Payment Initialization Failed',
+        message: err.message || 'Could not initiate Razorpay transaction.',
+      });
     } finally {
       setBookingLoading(false);
     }
@@ -241,7 +277,7 @@ export default function SearchBoardsPage() {
                 <ArrowLeft className="w-4 h-4" /> Back to Advertiser Hub
               </Link>
               <h1 className={styles.title}>Find & Rent Billboard Spaces</h1>
-              <p className={styles.subtitle}>Discover verified hoardings ranked by Gemini AI Location Scores[cite: 1].</p>
+              <p className={styles.subtitle}>Discover verified hoardings ranked by Gemini AI Location Scores.</p>
             </div>
           </div>
 
@@ -300,7 +336,7 @@ export default function SearchBoardsPage() {
                     )}
                     <div className="absolute top-3 right-3">
                       <span className={styles.scoreBadge}>
-                        <Sparkles className="w-3 h-3" /> Score {space.location_score || 85}/100[cite: 1]
+                        <Sparkles className="w-3 h-3" /> Score {space.location_score || 85}/100
                       </span>
                     </div>
                   </div>
@@ -401,12 +437,12 @@ export default function SearchBoardsPage() {
                   />
                 </div>
 
-                {/* AI Banner Verification Widget[cite: 1] */}
+                {/* AI Banner Verification Widget */}
                 {bannerPreview && (
                   <div className="p-3.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-indigo-300 flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Inspector[cite: 1]
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Inspector
                       </span>
                       <button
                         type="button"
@@ -438,7 +474,7 @@ export default function SearchBoardsPage() {
                   </div>
                 )}
 
-                {/* Total Price Summary[cite: 1] */}
+                {/* Total Price Summary */}
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-xs">
                   <div className="flex justify-between text-slate-400">
                     <span>Base Rent ({durationMonths} Mo):</span>
@@ -464,7 +500,7 @@ export default function SearchBoardsPage() {
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <>
-                      <CreditCard className="w-4 h-4" /> Pay with Razorpay & Confirm Booking[cite: 1]
+                      <CreditCard className="w-4 h-4" /> Pay with Razorpay & Confirm Booking
                     </>
                   )}
                 </button>
@@ -472,6 +508,19 @@ export default function SearchBoardsPage() {
             </div>
           </div>
         )}
+
+        {/* Custom Status Modal for Notifications & Confirmations */}
+        <StatusModal
+          isOpen={popup.isOpen}
+          type={popup.type}
+          title={popup.title}
+          message={popup.message}
+          onConfirm={popup.onConfirm}
+          onClose={() => {
+            if (popup.onConfirm) popup.onConfirm();
+            setPopup((prev) => ({ ...prev, isOpen: false }));
+          }}
+        />
       </div>
     </>
   );

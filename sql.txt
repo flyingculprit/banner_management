@@ -1,0 +1,93 @@
+DO $$
+DECLARE
+  new_admin_id UUID := gen_random_uuid();
+BEGIN
+  -- Insert into Supabase Auth
+  INSERT INTO auth.users (
+    id,
+    instance_id,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    created_at,
+    updated_at,
+    role,
+    aud
+  ) VALUES (
+    new_admin_id,
+    '00000000-0000-0000-0000-000000000000',
+    'newadmin@adflex.com',
+    crypt('NewAdminPassword@123', gen_salt('bf')),
+    NOW(),
+    '{"provider":"email","providers":["email"]}',
+    '{"full_name":"Platform Administrator","role":"admin"}',
+    NOW(),
+    NOW(),
+    'authenticated',
+    'authenticated'
+  );
+
+  -- Insert/Upsert into Profiles Table
+  INSERT INTO public.profiles (id, full_name, phone, role)
+  VALUES (new_admin_id, 'Platform Administrator', '+91 0000000000', 'admin')
+  ON CONFLICT (id) DO UPDATE 
+  SET role = 'admin';
+END $$;
+
+
+change admin
+
+clear all in db
+
+-- 1. Truncate all application data tables
+TRUNCATE TABLE public.space_chat_messages CASCADE;
+TRUNCATE TABLE public.bookings CASCADE;
+TRUNCATE TABLE public.spaces CASCADE;
+TRUNCATE TABLE public.profiles CASCADE;
+
+-- 2. Clear all authentication users
+DELETE FROM auth.users;
+
+-- 3. Enable pgcrypto extension for secure password hashing
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- 4. Create a fresh Admin Account
+DO $$
+DECLARE
+  new_admin_id UUID := gen_random_uuid();
+BEGIN
+  -- Insert Admin into Supabase Auth
+  INSERT INTO auth.users (
+    id,
+    instance_id,
+    email,
+    encrypted_password,
+    email_confirmed_at,
+    raw_app_meta_data,
+    raw_user_meta_data,
+    created_at,
+    updated_at,
+    role,
+    aud
+  ) VALUES (
+    new_admin_id,
+    '00000000-0000-0000-0000-000000000000',
+    'admin@adflex.com',
+    crypt('Admin@12345', gen_salt('bf')),
+    NOW(),
+    '{"provider":"email","providers":["email"]}',
+    '{"full_name":"Platform Administrator","role":"admin"}',
+    NOW(),
+    NOW(),
+    'authenticated',
+    'authenticated'
+  );
+
+  -- Insert Admin into Profiles
+  INSERT INTO public.profiles (id, full_name, phone, role)
+  VALUES (new_admin_id, 'Platform Administrator', '+91 9876543210', 'admin')
+  ON CONFLICT (id) DO UPDATE 
+  SET role = 'admin';
+END $$;

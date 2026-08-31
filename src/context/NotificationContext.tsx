@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 
 interface NotificationContextType {
@@ -21,19 +21,27 @@ const NotificationContext = createContext<NotificationContextType>({
 
 export const NotificationProvider = ({ children }: { children: React.ReactNode }) => {
   const [currentUser, setCurrentUser] = useState<any>(null);
-  const [unreadTotal, setUnreadTotal] = useState(0);
+  const [unreadTotal, setUnreadTotal] = useState<number>(0);
   const [unreadBySpace, setUnreadBySpace] = useState<{ [spaceId: string]: number }>({});
   const [unreadByBooking, setUnreadByBooking] = useState<{ [bookingId: string]: number }>({});
   const [unreadByChannel, setUnreadByChannel] = useState<{ [channel: string]: number }>({});
 
-  const fetchUnreadCounts = async (userId: string) => {
+  const fetchUnreadCounts = useCallback(async (userId: string, userRole?: string) => {
     if (!userId) return;
 
-    const { data: messages } = await supabase
+    let query = supabase
       .from('space_chat_messages')
-      .select('id, space_id, booking_id, channel_type, sender_id, is_read')
+      .select('id, space_id, booking_id, channel_type, sender_id, receiver_id, is_read')
       .eq('is_read', false)
       .neq('sender_id', userId);
+
+    if (userRole === 'admin') {
+      query = query.or(`receiver_id.eq.${userId},channel_type.eq.advertiser_admin,channel_type.eq.owner_admin`);
+    } else {
+      query = query.or(`receiver_id.eq.${userId},receiver_id.is.null`);
+    }
+
+    const { data: messages } = await query;
 
     if (messages) {
       setUnreadTotal(messages.length);
@@ -52,20 +60,22 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
       setUnreadByBooking(byBooking);
       setUnreadByChannel(byChannel);
     }
-  };
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        setCurrentUser(session.user);
-        fetchUnreadCounts(session.user.id);
+        const user = session.user;
+        setCurrentUser(user);
+        fetchUnreadCounts(user.id, user.user_metadata?.role);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        setCurrentUser(session.user);
-        fetchUnreadCounts(session.user.id);
+        const user = session.user;
+        setCurrentUser(user);
+        fetchUnreadCounts(user.id, user.user_metadata?.role);
       } else {
         setCurrentUser(null);
         setUnreadTotal(0);
@@ -75,25 +85,25 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
       }
     });
 
-    // Realtime WebSocket Subscription for Live Chat Alerts
-    const channel = supabase
-      .channel('global-chat-notifications')
+    const channelId = `global-notif-${Date.now()}`;
+    const realtimeChannel = supabase
+      .channel(channelId)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'space_chat_messages' },
         () => {
           supabase.auth.getUser().then(({ data: { user } }) => {
-            if (user) fetchUnreadCounts(user.id);
+            if (user) fetchUnreadCounts(user.id, user.user_metadata?.role);
           });
         }
       )
       .subscribe();
 
     return () => {
-      subscription.unsubscribe();
-      supabase.removeChannel(channel);
+      authSub.subscription.unsubscribe();
+      supabase.removeChannel(realtimeChannel);
     };
-  }, []);
+  }, [fetchUnreadCounts]);
 
   return (
     <NotificationContext.Provider
@@ -103,7 +113,9 @@ export const NotificationProvider = ({ children }: { children: React.ReactNode }
         unreadByBooking,
         unreadByChannel,
         refreshUnread: async () => {
-          if (currentUser) await fetchUnreadCounts(currentUser.id);
+          if (currentUser) {
+            await fetchUnreadCounts(currentUser.id, currentUser.user_metadata?.role);
+          }
         },
       }}
     >

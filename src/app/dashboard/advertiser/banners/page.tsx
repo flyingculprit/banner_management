@@ -13,6 +13,8 @@ export default function AdvertiserBannersPage() {
   const [chatConfig, setChatConfig] = useState<{
     spaceId: string;
     spaceTitle: string;
+    recipientId?: string;
+    recipientName?: string;
     channelType: 'advertiser_owner' | 'advertiser_admin';
     bookingId?: string;
   } | null>(null);
@@ -24,7 +26,7 @@ export default function AdvertiserBannersPage() {
     setLoading(true);
     const { data } = await supabase
       .from('bookings')
-      .select('*, spaces(*, profiles:owner_id(full_name, phone))')
+      .select('*, spaces(*, profiles:owner_id(id, full_name, phone))')
       .eq('advertiser_id', userId)
       .order('created_at', { ascending: false });
 
@@ -69,15 +71,13 @@ export default function AdvertiserBannersPage() {
       }
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-2">Purchased Banners & Rental Campaigns</h1>
-      <p className="text-xs text-slate-400 mb-6">Monitor campaign status, due dates, and chat directly with board owners or platform admins[cite: 1].</p>
+      <p className="text-xs text-slate-400 mb-6">Monitor campaign status, due dates, and chat separately with board owners or admins.</p>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {loading ? (
@@ -135,11 +135,14 @@ export default function AdvertiserBannersPage() {
                 </div>
 
                 <div className="pt-4 border-t border-slate-800 flex gap-2">
+                  {/* Isolated Chat with Owner */}
                   <button
                     onClick={() =>
                       setChatConfig({
                         spaceId: booking.space_id,
                         spaceTitle: `${booking.spaces?.area}, ${booking.spaces?.city}`,
+                        recipientId: booking.spaces?.profiles?.id,
+                        recipientName: booking.spaces?.profiles?.full_name,
                         channelType: 'advertiser_owner',
                         bookingId: booking.id,
                       })
@@ -152,6 +155,7 @@ export default function AdvertiserBannersPage() {
                     )}
                   </button>
 
+                  {/* Isolated Chat with Admin */}
                   <button
                     onClick={() =>
                       setChatConfig({
@@ -180,6 +184,8 @@ export default function AdvertiserBannersPage() {
           spaceId={chatConfig.spaceId}
           spaceTitle={chatConfig.spaceTitle}
           currentUser={currentUser}
+          recipientId={chatConfig.recipientId}
+          recipientName={chatConfig.recipientName}
           channelType={chatConfig.channelType}
           bookingId={chatConfig.bookingId}
           onClose={() => {

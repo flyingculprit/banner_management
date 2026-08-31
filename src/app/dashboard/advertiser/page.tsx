@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Script from 'next/script';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import StatusModal from '@/components/StatusModal';
 import { Search, Sparkles, MapPin, CreditCard, Loader2, X } from 'lucide-react';
 
 declare global {
@@ -34,6 +35,20 @@ export default function AdvertiserExplorerPage() {
   const [aiResult, setAiResult] = useState<any>(null);
   const [bookingLoading, setBookingLoading] = useState(false);
 
+  // StatusModal State
+  const [popup, setPopup] = useState<{
+    isOpen: boolean;
+    type: 'success' | 'error' | 'warning' | 'info';
+    title: string;
+    message: string;
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: '',
+  });
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) router.push('/auth/signin');
@@ -46,7 +61,6 @@ export default function AdvertiserExplorerPage() {
 
   const fetchSpaces = async () => {
     setLoading(true);
-    // Fetch ALL approved spaces (both rented and available)
     const { data } = await supabase
       .from('spaces')
       .select('*')
@@ -103,7 +117,12 @@ export default function AdvertiserExplorerPage() {
       if (!res.ok) throw new Error(data.error);
       setAiResult(data);
     } catch (err: any) {
-      alert('AI Verification error: ' + err.message);
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'AI Verification Failed',
+        message: err.message || 'Could not complete AI creative verification.',
+      });
     } finally {
       setAiVerifying(false);
     }
@@ -111,7 +130,12 @@ export default function AdvertiserExplorerPage() {
 
   const handleRazorpayPayment = async () => {
     if (!bannerFile || !user || !selectedSpace) {
-      alert('Please upload an ad banner file.');
+      setPopup({
+        isOpen: true,
+        type: 'warning',
+        title: 'Banner Required',
+        message: 'Please upload an ad banner file before proceeding.',
+      });
       return;
     }
 
@@ -180,11 +204,17 @@ export default function AdvertiserExplorerPage() {
           });
 
           if (bookingErr) throw bookingErr;
-
+          
           await supabase.from('spaces').update({ is_rented: true }).eq('id', selectedSpace.id);
 
-          alert('Payment Successful! Billboard booked.');
-          router.push('/dashboard/advertiser/banners');
+          setSelectedSpace(null);
+          setPopup({
+            isOpen: true,
+            type: 'success',
+            title: 'Payment Successful',
+            message: 'Your billboard space has been booked and activated successfully.',
+            onConfirm: () => router.push('/dashboard/advertiser/banners'),
+          });
         },
         prefill: {
           name: user.user_metadata?.full_name || 'Advertiser',
@@ -196,7 +226,12 @@ export default function AdvertiserExplorerPage() {
       const paymentObject = new window.Razorpay(options);
       paymentObject.open();
     } catch (err: any) {
-      alert('Payment error: ' + err.message);
+      setPopup({
+        isOpen: true,
+        type: 'error',
+        title: 'Payment Failed',
+        message: err.message || 'An error occurred during payment processing.',
+      });
     } finally {
       setBookingLoading(false);
     }
@@ -256,7 +291,7 @@ export default function AdvertiserExplorerPage() {
 
                   <div className="absolute top-3 right-3 flex items-center gap-1.5">
                     <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                      <Sparkles className="w-3 h-3 inline mr-1" /> Score {space.location_score || 85}/100[cite: 1]
+                      <Sparkles className="w-3 h-3 inline mr-1" /> Score {space.location_score || 85}/100
                     </span>
                   </div>
                 </div>
@@ -372,7 +407,7 @@ export default function AdvertiserExplorerPage() {
                   <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-indigo-300 flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Verification[cite: 1]
+                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Verification
                       </span>
                       <button
                         type="button"
@@ -423,6 +458,19 @@ export default function AdvertiserExplorerPage() {
             </div>
           </div>
         )}
+
+        {/* Custom Status Modal for Notifications & Confirmations */}
+        <StatusModal
+          isOpen={popup.isOpen}
+          type={popup.type}
+          title={popup.title}
+          message={popup.message}
+          onConfirm={popup.onConfirm}
+          onClose={() => {
+            if (popup.onConfirm) popup.onConfirm();
+            setPopup((prev) => ({ ...prev, isOpen: false }));
+          }}
+        />
       </div>
     </>
   );

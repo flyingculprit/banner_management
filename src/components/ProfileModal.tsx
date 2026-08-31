@@ -5,30 +5,47 @@ import { supabase } from '@/lib/supabase';
 import { X, Lock, User, Mail, Phone, Shield, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 
 interface ProfileModalProps {
-  currentUser: any;
+  currentUser?: any;
   onClose: () => void;
 }
 
-export default function ProfileModal({ currentUser, onClose }: ProfileModalProps) {
+export default function ProfileModal({ onClose }: ProfileModalProps) {
   const [profile, setProfile] = useState<any>(null);
+  const [userEmail, setUserEmail] = useState<string>('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     async function loadProfile() {
-      if (!currentUser) return;
-      const { data } = await supabase
+      setFetching(true);
+      const { data: { user }, error } = await supabase.auth.getUser();
+
+      if (error || !user) {
+        setErrorMsg('Unable to verify active session.');
+        setFetching(false);
+        return;
+      }
+
+      setUserEmail(user.email || '');
+
+      const { data: profileData } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', currentUser.id)
+        .eq('id', user.id)
         .single();
-      setProfile(data);
+
+      if (profileData) {
+        setProfile(profileData);
+      }
+      setFetching(false);
     }
+
     loadProfile();
-  }, [currentUser]);
+  }, []);
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,7 +53,7 @@ export default function ProfileModal({ currentUser, onClose }: ProfileModalProps
     setSuccessMsg('');
 
     if (newPassword.length < 6) {
-      setErrorMsg('Password must be at least 6 characters long.');
+      setErrorMsg('Password must be at least 6 characters.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -73,72 +90,63 @@ export default function ProfileModal({ currentUser, onClose }: ProfileModalProps
           </button>
         </div>
 
-        {/* User Details */}
-        <div className="mt-4 space-y-2.5 text-xs">
-          <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
-            <span className="text-slate-400 flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-indigo-400" /> Full Name</span>
-            <span className="text-slate-200 font-semibold">{profile?.full_name || currentUser?.user_metadata?.full_name || 'N/A'}</span>
+        {fetching ? (
+          <div className="py-10 flex items-center justify-center gap-2 text-xs text-slate-500">
+            <Loader2 className="w-4 h-4 animate-spin text-indigo-500" /> Loading profile...
           </div>
+        ) : (
+          <div className="mt-4 space-y-2.5 text-xs">
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
+              <span className="text-slate-400 flex items-center gap-1.5"><User className="w-3.5 h-3.5 text-indigo-400" /> Full Name</span>
+              <span className="text-slate-200 font-semibold">{profile?.full_name || 'N/A'}</span>
+            </div>
 
-          <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
-            <span className="text-slate-400 flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-cyan-400" /> Email</span>
-            <span className="text-slate-200 font-medium">{currentUser?.email}</span>
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
+              <span className="text-slate-400 flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-cyan-400" /> Email</span>
+              <span className="text-slate-200 font-medium">{userEmail}</span>
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
+              <span className="text-slate-400 flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-emerald-400" /> Phone</span>
+              <span className="text-slate-200 font-medium">{profile?.phone || 'N/A'}</span>
+            </div>
+
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
+              <span className="text-slate-400 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-purple-400" /> Role</span>
+              <span className="text-indigo-400 font-bold uppercase">{profile?.role || 'user'}</span>
+            </div>
           </div>
+        )}
 
-          <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
-            <span className="text-slate-400 flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-emerald-400" /> Phone</span>
-            <span className="text-slate-200 font-medium">{profile?.phone || 'N/A'}</span>
-          </div>
-
-          <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 flex items-center justify-between">
-            <span className="text-slate-400 flex items-center gap-1.5"><Shield className="w-3.5 h-3.5 text-purple-400" /> Role</span>
-            <span className="text-indigo-400 font-bold uppercase">{profile?.role || 'user'}</span>
-          </div>
-        </div>
-
-        {/* Change Password Form */}
         <form onSubmit={handleChangePassword} className="mt-5 pt-4 border-t border-slate-800 space-y-3">
           <h4 className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
             <Lock className="w-3.5 h-3.5 text-amber-400" /> Change Password
           </h4>
 
-          {errorMsg && (
-            <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-1.5">
-              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {errorMsg}
-            </div>
-          )}
+          {errorMsg && <p className="text-rose-400 text-xs">{errorMsg}</p>}
+          {successMsg && <p className="text-emerald-400 text-xs">{successMsg}</p>}
 
-          {successMsg && (
-            <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> {successMsg}
-            </div>
-          )}
+          <input
+            type="password"
+            placeholder="New Password (min. 6 characters)"
+            required
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:border-indigo-500"
+          />
 
-          <div>
-            <input
-              type="password"
-              placeholder="New Password (min. 6 characters)"
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <input
-              type="password"
-              placeholder="Confirm New Password"
-              required
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:border-indigo-500"
-            />
-          </div>
+          <input
+            type="password"
+            placeholder="Confirm New Password"
+            required
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-xs text-white outline-none focus:border-indigo-500"
+          />
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || fetching}
             className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold rounded-lg text-xs transition flex items-center justify-center gap-1.5"
           >
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Update Password'}

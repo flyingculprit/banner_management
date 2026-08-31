@@ -16,7 +16,7 @@ export default function OwnerRentsPage() {
     setLoading(true);
     const { data } = await supabase
       .from('bookings')
-      .select('*, spaces!inner(*), profiles:advertiser_id(full_name, phone)')
+      .select('*, spaces!inner(*), profiles:advertiser_id(id, full_name, phone)')
       .eq('spaces.owner_id', userId)
       .order('created_at', { ascending: false });
 
@@ -62,7 +62,7 @@ export default function OwnerRentsPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold text-white mb-2">Rented Billboard & Tenant Management</h1>
-      <p className="text-xs text-slate-400 mb-6">Track tenant details, rental validities, next due dates, and direct chat with advertisers[cite: 1].</p>
+      <p className="text-xs text-slate-400 mb-6">Track tenant details, rental validities, next due dates, and direct chat with advertisers.</p>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
@@ -73,7 +73,7 @@ export default function OwnerRentsPage() {
                 <th className="p-4 font-semibold">Advertiser & Contact</th>
                 <th className="p-4 font-semibold">Duration & Validity</th>
                 <th className="p-4 font-semibold">Next Due / Expiry</th>
-                <th className="p-4 font-semibold">Net Payout[cite: 1]</th>
+                <th className="p-4 font-semibold">Net Payout</th>
                 <th className="p-4 font-semibold">Status</th>
                 <th className="p-4 font-semibold">Direct Chat</th>
               </tr>
@@ -124,7 +124,7 @@ export default function OwnerRentsPage() {
                           onClick={() => setActiveChatRental(rental)}
                           className="relative px-3 py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
                         >
-                          <MessageSquare className="w-3.5 h-3.5" /> Chat
+                          <MessageSquare className="w-3.5 h-3.5" /> Chat with {rental.profiles?.full_name}
                           {hasUnread && (
                             <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
                           )}
@@ -144,6 +144,8 @@ export default function OwnerRentsPage() {
           spaceId={activeChatRental.space_id}
           spaceTitle={`${activeChatRental.spaces?.area}, ${activeChatRental.spaces?.city}`}
           currentUser={currentUser}
+          recipientId={activeChatRental.profiles?.id}
+          recipientName={activeChatRental.profiles?.full_name}
           channelType="advertiser_owner"
           bookingId={activeChatRental.id}
           onClose={() => {

@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import SpaceChatModal from '@/components/SpaceChatModal';
+import StatusModal from '@/components/StatusModal';
 import { MapPin, ExternalLink, Check, X, MessageSquare, Loader2 } from 'lucide-react';
 
 export default function AdminVerifyPage() {
@@ -12,20 +13,35 @@ export default function AdminVerifyPage() {
   const [activeChatSpace, setActiveChatSpace] = useState<any>(null);
   const [unreadCounts, setUnreadCounts] = useState<{ [key: string]: number }>({});
 
-  const fetchSpaces = async () => {
+  const [popup, setPopup] = useState<{
+    isOpen: boolean;
+    type: 'success' | 'error' | 'warning' | 'info';
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    type: 'info',
+    title: '',
+    message: '',
+  });
+
+  const fetchSpaces = useCallback(async () => {
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: authData } = await supabase.auth.getUser();
+    const user = authData?.user;
     setCurrentUser(user);
 
     const { data, error } = await supabase
       .from('spaces')
-      .select('*, profiles:owner_id(full_name, phone)')
+      .select('*, profiles:owner_id(id, full_name, phone)')
       .order('created_at', { ascending: false });
 
     if (!error && data) {
       setSpaces(data);
 
-      // Check unread messages for each space
       const { data: unreadData } = await supabase
         .from('space_chat_messages')
         .select('space_id')
@@ -40,30 +56,50 @@ export default function AdminVerifyPage() {
       setUnreadCounts(counts);
     }
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchSpaces();
-  }, []);
+  }, [fetchSpaces]);
 
-  const handleUpdateStatus = async (spaceId: string, status: 'approved' | 'rejected') => {
-    const { error } = await supabase
-      .from('spaces')
-      .update({ status })
-      .eq('id', spaceId);
+  const confirmStatusChange = (spaceId: string, status: 'approved' | 'rejected', areaName: string) => {
+    setPopup({
+      isOpen: true,
+      type: status === 'approved' ? 'warning' : 'error',
+      title: `${status === 'approved' ? 'Approve' : 'Reject'} Board Space?`,
+      message: `Are you sure you want to mark "${areaName}" as ${status.toUpperCase()}? This will update the space live across the advertiser discovery network.`,
+      confirmText: `Confirm ${status.toUpperCase()}`,
+      cancelText: 'Cancel',
+      onConfirm: async () => {
+        const { error } = await supabase
+          .from('spaces')
+          .update({ status })
+          .eq('id', spaceId);
 
-    if (error) {
-      alert('Failed to update status: ' + error.message);
-    } else {
-      alert(`Space status locked as ${status.toUpperCase()}!`);
-      fetchSpaces();
-    }
+        if (error) {
+          setPopup({
+            isOpen: true,
+            type: 'error',
+            title: 'Action Failed',
+            message: error.message,
+          });
+        } else {
+          setPopup({
+            isOpen: true,
+            type: 'success',
+            title: 'Status Updated',
+            message: `Space "${areaName}" has been successfully ${status}.`,
+          });
+          fetchSpaces();
+        }
+      },
+    });
   };
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-white mb-2">Space Verification Hub</h1>
-      <p className="text-xs text-slate-400 mb-6">Inspect physical specs, verify locations, and approve or reject submissions.</p>
+      <h1 className="text-2xl font-bold text-white mb-2">Space Verification Queue</h1>
+      <p className="text-xs text-slate-400 mb-6">Review submitted boards, inspect specifications, and verify directly with owners.</p>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
@@ -73,30 +109,33 @@ export default function AdminVerifyPage() {
                 <th className="p-4 font-semibold">Location & Owner</th>
                 <th className="p-4 font-semibold">Dimensions</th>
                 <th className="p-4 font-semibold">Price / Rate</th>
-                <th className="p-4 font-semibold">AI Location Score</th>
-                <th className="p-4 font-semibold">Location / Photo</th>
-                <th className="p-4 font-semibold">Decision / Action</th>
+                <th className="p-4 font-semibold">Location Score</th>
+                <th className="p-4 font-semibold">Evidence</th>
+                <th className="p-4 font-semibold">Current State</th>
+                <th className="p-4 font-semibold">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500">
+                  <td colSpan={7} className="p-8 text-center text-slate-500">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-indigo-500" />
                   </td>
                 </tr>
               ) : spaces.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500">No board listings found.</td>
+                  <td colSpan={7} className="p-8 text-center text-slate-500">No board listings found.</td>
                 </tr>
               ) : (
                 spaces.map((space) => {
                   const hasUnread = (unreadCounts[space.id] || 0) > 0;
+                  const owner = space.profiles;
+
                   return (
                     <tr key={space.id} className="hover:bg-slate-800/40 transition">
                       <td className="p-4">
                         <div className="font-semibold text-white">{space.area}, {space.city}</div>
-                        <div className="text-slate-400 mt-0.5">{space.profiles?.full_name} ({space.profiles?.phone || 'No phone'})</div>
+                        <div className="text-slate-400 mt-0.5">{owner?.full_name} ({owner?.phone || 'No phone'})</div>
                       </td>
                       <td className="p-4 font-mono text-slate-300">{space.width} × {space.height} ft</td>
                       <td className="p-4 font-semibold text-white">₹{Number(space.monthly_rate).toLocaleString()}</td>
@@ -118,38 +157,46 @@ export default function AdminVerifyPage() {
                         </div>
                       </td>
                       <td className="p-4">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                          space.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400' :
+                          space.status === 'rejected' ? 'bg-rose-500/10 text-rose-400' :
+                          'bg-amber-500/10 text-amber-400'
+                        }`}>
+                          {space.status}
+                        </span>
+                      </td>
+                      <td className="p-4">
                         <div className="flex items-center gap-2">
                           {space.status === 'pending' ? (
                             <>
                               <button
-                                onClick={() => handleUpdateStatus(space.id, 'approved')}
-                                className="px-3 py-1 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
+                                onClick={() => confirmStatusChange(space.id, 'approved', space.area)}
+                                className="px-2.5 py-1 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
                               >
                                 <Check className="w-3.5 h-3.5" /> Approve
                               </button>
                               <button
-                                onClick={() => handleUpdateStatus(space.id, 'rejected')}
-                                className="px-3 py-1 bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
+                                onClick={() => confirmStatusChange(space.id, 'rejected', space.area)}
+                                className="px-2.5 py-1 bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
                               >
                                 <X className="w-3.5 h-3.5" /> Reject
                               </button>
                             </>
                           ) : (
-                            <span
-                              className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase ${
-                                space.status === 'approved'
-                                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                  : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                              }`}
-                            >
-                              {space.status === 'approved' ? '✓ Approved' : '✗ Rejected'}
-                            </span>
+                            <span className="text-[11px] text-slate-500 font-medium">Reviewed</span>
                           )}
 
-                          {/* Chat button with live unread indicator */}
                           <button
-                            onClick={() => setActiveChatSpace(space)}
-                            className="relative p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition"
+                            onClick={() =>
+                              setActiveChatSpace({
+                                id: space.id,
+                                area: space.area,
+                                city: space.city,
+                                owner_id: space.owner_id,
+                                owner_name: owner?.full_name || 'Board Owner',
+                              })
+                            }
+                            className="relative p-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600/30 rounded-lg transition"
                             title="Chat with Owner"
                           >
                             <MessageSquare className="w-4 h-4" />
@@ -168,11 +215,24 @@ export default function AdminVerifyPage() {
         </div>
       </div>
 
+      <StatusModal
+        isOpen={popup.isOpen}
+        type={popup.type}
+        title={popup.title}
+        message={popup.message}
+        confirmText={popup.confirmText}
+        cancelText={popup.cancelText}
+        onConfirm={popup.onConfirm}
+        onClose={() => setPopup((prev) => ({ ...prev, isOpen: false }))}
+      />
+
       {activeChatSpace && currentUser && (
         <SpaceChatModal
           spaceId={activeChatSpace.id}
           spaceTitle={`${activeChatSpace.area}, ${activeChatSpace.city}`}
           currentUser={currentUser}
+          recipientId={activeChatSpace.owner_id}
+          recipientName={activeChatSpace.owner_name}
           channelType="owner_admin"
           onClose={() => {
             setActiveChatSpace(null);
