@@ -4,12 +4,13 @@ import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import SpaceChatModal from '@/components/SpaceChatModal';
 import StatusModal from '@/components/StatusModal';
-import { MapPin, ExternalLink, Check, X, MessageSquare, Loader2 } from 'lucide-react';
+import { MapPin, ExternalLink, Check, X, MessageSquare, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function AdminVerifyPage() {
   const [spaces, setSpaces] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [activeChatSpace, setActiveChatSpace] = useState<any>(null);
   const [unreadCounts, setUnreadCounts] = useState<{ [key: string]: number }>({});
 
@@ -28,52 +29,59 @@ export default function AdminVerifyPage() {
     message: '',
   });
 
-  const fetchSpaces = useCallback(async () => {
-    setLoading(true);
-    const { data: authData } = await supabase.auth.getUser();
-    const user = authData?.user;
-    setCurrentUser(user);
+  const refreshAdminUnread = useCallback(async (adminId: string) => {
+    const { data: unreadData, error } = await supabase
+      .from('space_chat_messages')
+      .select('space_id')
+      .eq('is_read', false)
+      .neq('sender_id', adminId);
 
-    const { data, error } = await supabase
-      .from('spaces')
-      .select('*, profiles:owner_id(id, full_name, phone)')
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setSpaces(data);
-
-      const { data: unreadData } = await supabase
-        .from('space_chat_messages')
-        .select('space_id')
-        .eq('channel_type', 'owner_admin')
-        .eq('is_read', false)
-        .neq('sender_id', user?.id || '');
-
+    if (!error && unreadData) {
       const counts: { [key: string]: number } = {};
-      unreadData?.forEach((m) => {
+      unreadData.forEach((m) => {
         counts[m.space_id] = (counts[m.space_id] || 0) + 1;
       });
       setUnreadCounts(counts);
     }
-    setLoading(false);
   }, []);
+
+  const fetchSpaces = useCallback(async () => {
+    setLoading(true);
+    setFetchError(null);
+
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const user = authData?.user;
+      setCurrentUser(user);
+
+      const res = await fetch('/api/admin/spaces', { cache: 'no-store' });
+      const result = await res.json();
+
+      if (!res.ok || result.error) {
+        throw new Error(result.error || 'Failed to fetch space queue');
+      }
+
+      setSpaces(result.spaces || []);
+
+      if (user?.id) {
+        await refreshAdminUnread(user.id);
+      }
+    } catch (err: any) {
+      console.error('Error fetching admin spaces:', err);
+      setFetchError(err.message || 'Error loading verification queue.');
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshAdminUnread]);
 
   useEffect(() => {
     fetchSpaces();
 
-    // Realtime subscription: Remove deleted spaces and re-fetch changes immediately
-    const channel = supabase
+    const spaceSub = supabase
       .channel('admin-spaces-realtime')
       .on(
         'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'spaces' },
-        (payload) => {
-          setSpaces((prev) => prev.filter((space) => space.id !== payload.old.id));
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'spaces' },
+        { event: '*', schema: 'public', table: 'spaces' },
         () => {
           fetchSpaces();
         }
@@ -81,24 +89,42 @@ export default function AdminVerifyPage() {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(spaceSub);
     };
   }, [fetchSpaces]);
 
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const chatSub = supabase
+      .channel(`admin-chat-realtime-${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'space_chat_messages' },
+        () => {
+          refreshAdminUnread(currentUser.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(chatSub);
+    };
+  }, [currentUser?.id, refreshAdminUnread]);
+
   const confirmStatusChange = (spaceId: string, status: 'approved' | 'rejected', areaName: string) => {
+    const targetSpace = spaces.find((s) => s.id === spaceId);
+    const owner = targetSpace?.profiles;
+
     setPopup({
       isOpen: true,
       type: status === 'approved' ? 'warning' : 'error',
       title: `${status === 'approved' ? 'Approve' : 'Reject'} Board Space?`,
-      message: `Are you sure you want to mark "${areaName}" as ${status.toUpperCase()}? This will update the space live across the advertiser discovery network.`,
+      message: `Are you sure you want to mark "${areaName}" as ${status.toUpperCase()}? This will update the space live across the advertiser discovery network and dispatch an email to the owner.`,
       confirmText: `Confirm ${status.toUpperCase()}`,
       cancelText: 'Cancel',
       onConfirm: async () => {
-        const { error } = await supabase
-          .from('spaces')
-          .update({ status })
-          .eq('id', spaceId);
-
+        const { error } = await supabase.from('spaces').update({ status }).eq('id', spaceId);
         if (error) {
           setPopup({
             isOpen: true,
@@ -111,8 +137,30 @@ export default function AdminVerifyPage() {
             isOpen: true,
             type: 'success',
             title: 'Status Updated',
-            message: `Space "${areaName}" has been successfully ${status}.`,
+            message: `Space "${areaName}" has been successfully ${status}. An email notification has been triggered for the owner.`,
           });
+
+          // Trigger email notification to the owner
+          try {
+            await fetch('/api/email/notify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'BOARD_STATUS_UPDATE',
+                payload: {
+                  ownerId: targetSpace?.owner_id,
+                  ownerEmail: owner?.email,
+                  ownerName: owner?.full_name || 'Billboard Owner',
+                  area: targetSpace?.area,
+                  city: targetSpace?.city,
+                  status,
+                },
+              }),
+            });
+          } catch (err) {
+            console.error('Failed to trigger owner status email:', err);
+          }
+
           fetchSpaces();
         }
       },
@@ -121,8 +169,26 @@ export default function AdminVerifyPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-white mb-2">Space Verification Queue</h1>
-      <p className="text-xs text-slate-400 mb-6">Review submitted boards, inspect specifications, and verify directly with owners.</p>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-2xl font-bold text-white">Space Verification Queue</h1>
+        <button
+          onClick={() => fetchSpaces()}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium transition"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+      <p className="text-xs text-slate-400 mb-6">
+        Review submitted boards, inspect specifications, and verify directly with owners.
+      </p>
+
+      {fetchError && (
+        <div className="mb-6 p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>Queue Load Error: {fetchError}</span>
+        </div>
+      )}
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
@@ -147,7 +213,9 @@ export default function AdminVerifyPage() {
                 </tr>
               ) : spaces.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-slate-500">No board listings found.</td>
+                  <td colSpan={7} className="p-8 text-center text-slate-500">
+                    No board listings found in queue.
+                  </td>
                 </tr>
               ) : (
                 spaces.map((space) => {
@@ -157,35 +225,59 @@ export default function AdminVerifyPage() {
                   return (
                     <tr key={space.id} className="hover:bg-slate-800/40 transition">
                       <td className="p-4">
-                        <div className="font-semibold text-white">{space.area}, {space.city}</div>
-                        <div className="text-slate-400 mt-0.5">{owner?.full_name} ({owner?.phone || 'No phone'})</div>
+                        <div className="font-semibold text-white">
+                          {space.area || 'N/A'}, {space.city || 'N/A'}
+                        </div>
+                        <div className="text-slate-400 mt-0.5">
+                          {owner?.full_name || 'Owner'} {owner?.phone && `(${owner.phone})`}
+                        </div>
                       </td>
-                      <td className="p-4 font-mono text-slate-300">{space.width} × {space.height} ft</td>
-                      <td className="p-4 font-semibold text-white">₹{Number(space.monthly_rate).toLocaleString()}</td>
+                      <td className="p-4 font-mono text-slate-300">
+                        {space.width} × {space.height} ft
+                      </td>
+                      <td className="p-4 font-semibold text-white">
+                        ₹{Number(space.monthly_rate || 0).toLocaleString()}
+                      </td>
                       <td className="p-4">
-                        <span className="text-cyan-400 font-bold">{space.location_score || 0}/100</span>
+                        <span className="text-cyan-400 font-bold">
+                          {space.location_score || 0}/100
+                        </span>
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
                           {space.map_link && (
-                            <a href={space.map_link} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline flex items-center gap-1">
+                            <a
+                              href={space.map_link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-indigo-400 hover:underline flex items-center gap-1"
+                            >
                               <MapPin className="w-3.5 h-3.5" /> Map
                             </a>
                           )}
                           {space.space_photo_url && (
-                            <a href={space.space_photo_url} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center gap-1">
+                            <a
+                              href={space.space_photo_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-cyan-400 hover:underline flex items-center gap-1"
+                            >
                               <ExternalLink className="w-3.5 h-3.5" /> Photo
                             </a>
                           )}
                         </div>
                       </td>
                       <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                          space.status === 'approved' ? 'bg-emerald-500/10 text-emerald-400' :
-                          space.status === 'rejected' ? 'bg-rose-500/10 text-rose-400' :
-                          'bg-amber-500/10 text-amber-400'
-                        }`}>
-                          {space.status}
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                            space.status === 'approved'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : space.status === 'rejected'
+                              ? 'bg-rose-500/10 text-rose-400'
+                              : 'bg-amber-500/10 text-amber-400'
+                          }`}
+                        >
+                          {space.status || 'pending'}
                         </span>
                       </td>
                       <td className="p-4">
@@ -224,7 +316,7 @@ export default function AdminVerifyPage() {
                           >
                             <MessageSquare className="w-4 h-4" />
                             {hasUnread && (
-                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
+                              <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
                             )}
                           </button>
                         </div>
@@ -259,7 +351,7 @@ export default function AdminVerifyPage() {
           channelType="owner_admin"
           onClose={() => {
             setActiveChatSpace(null);
-            fetchSpaces();
+            refreshAdminUnread(currentUser.id);
           }}
         />
       )}

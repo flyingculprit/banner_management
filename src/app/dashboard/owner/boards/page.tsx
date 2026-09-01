@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import SpaceChatModal from '@/components/SpaceChatModal';
 import EditSpaceModal from '@/components/EditSpaceModal';
 import StatusModal from '@/components/StatusModal';
-import { Edit, MessageSquare, ShieldCheck, User, Loader2, Trash2 } from 'lucide-react';
+import { Edit, ShieldCheck, User, Loader2, Trash2 } from 'lucide-react';
 
 export default function OwnerBoardsPage() {
   const [spaces, setSpaces] = useState<any[]>([]);
@@ -13,7 +13,9 @@ export default function OwnerBoardsPage() {
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // StatusModal State for Delete Confirmation and Alerts
+  const [adminUnreadCounts, setAdminUnreadCounts] = useState<{ [spaceId: string]: number }>({});
+  const [advertiserUnreadCounts, setAdvertiserUnreadCounts] = useState<{ [spaceId: string]: number }>({});
+
   const [popup, setPopup] = useState<{
     isOpen: boolean;
     type: 'success' | 'error' | 'warning' | 'info';
@@ -27,7 +29,6 @@ export default function OwnerBoardsPage() {
     message: '',
   });
 
-  // Chat Modal State
   const [chatConfig, setChatConfig] = useState<{
     spaceId: string;
     spaceTitle: string;
@@ -39,9 +40,35 @@ export default function OwnerBoardsPage() {
 
   const [editingSpace, setEditingSpace] = useState<any>(null);
 
-  // Unread maps
-  const [adminUnreadCounts, setAdminUnreadCounts] = useState<{ [spaceId: string]: number }>({});
-  const [advertiserUnreadCounts, setAdvertiserUnreadCounts] = useState<{ [spaceId: string]: number }>({});
+  // Fetch unread messages scoped to all boards owned by this user
+  const refreshUnreadCounts = useCallback(async (userId: string, currentSpaces: any[]) => {
+    if (!currentSpaces || currentSpaces.length === 0) return;
+
+    const spaceIds = currentSpaces.map((s) => s.id);
+
+    const { data: unreadData, error } = await supabase
+      .from('space_chat_messages')
+      .select('space_id, channel_type, sender_id')
+      .in('space_id', spaceIds)
+      .eq('is_read', false)
+      .neq('sender_id', userId);
+
+    if (error || !unreadData) return;
+
+    const adminCounts: { [key: string]: number } = {};
+    const advCounts: { [key: string]: number } = {};
+
+    unreadData.forEach((m) => {
+      if (m.channel_type === 'owner_admin') {
+        adminCounts[m.space_id] = (adminCounts[m.space_id] || 0) + 1;
+      } else {
+        advCounts[m.space_id] = (advCounts[m.space_id] || 0) + 1;
+      }
+    });
+
+    setAdminUnreadCounts(adminCounts);
+    setAdvertiserUnreadCounts(advCounts);
+  }, []);
 
   const fetchSpaces = useCallback(async (userId: string) => {
     setLoading(true);
@@ -53,30 +80,10 @@ export default function OwnerBoardsPage() {
 
     if (data) {
       setSpaces(data);
-
-      // Fetch unread messages for this owner
-      const { data: unreadData } = await supabase
-        .from('space_chat_messages')
-        .select('space_id, channel_type, booking_id')
-        .eq('is_read', false)
-        .neq('sender_id', userId);
-
-      const adminCounts: { [key: string]: number } = {};
-      const advCounts: { [key: string]: number } = {};
-
-      unreadData?.forEach((m) => {
-        if (m.channel_type === 'owner_admin') {
-          adminCounts[m.space_id] = (adminCounts[m.space_id] || 0) + 1;
-        } else if (m.channel_type === 'advertiser_owner') {
-          advCounts[m.space_id] = (advCounts[m.space_id] || 0) + 1;
-        }
-      });
-
-      setAdminUnreadCounts(adminCounts);
-      setAdvertiserUnreadCounts(advCounts);
+      await refreshUnreadCounts(userId, data);
     }
     setLoading(false);
-  }, []);
+  }, [refreshUnreadCounts]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -96,7 +103,30 @@ export default function OwnerBoardsPage() {
     return () => subscription.unsubscribe();
   }, [fetchSpaces]);
 
-  // Delete Space Confirmation
+  // Realtime subscription for incoming messages
+  useEffect(() => {
+    if (!currentUser?.id || spaces.length === 0) return;
+
+    const channel = supabase
+      .channel(`owner_realtime_badges_${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'space_chat_messages',
+        },
+        () => {
+          refreshUnreadCounts(currentUser.id, spaces);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser?.id, spaces, refreshUnreadCounts]);
+
   const confirmDeleteSpace = (space: any) => {
     if (space.is_rented) {
       setPopup({
@@ -118,7 +148,6 @@ export default function OwnerBoardsPage() {
     });
   };
 
-  // Delete Execution
   const executeDeleteSpace = async (spaceId: string) => {
     setDeletingId(spaceId);
     try {
@@ -215,7 +244,6 @@ export default function OwnerBoardsPage() {
                       <Edit className="w-3.5 h-3.5" /> Edit Board
                     </button>
 
-                    {/* Delete Button */}
                     <button
                       type="button"
                       disabled={deletingId === space.id}
@@ -229,7 +257,6 @@ export default function OwnerBoardsPage() {
                   </div>
 
                   <div className="flex gap-2">
-                    {/* Admin Verification Chat */}
                     <button
                       onClick={() =>
                         setChatConfig({
@@ -243,12 +270,11 @@ export default function OwnerBoardsPage() {
                     >
                       <ShieldCheck className="w-3.5 h-3.5 text-amber-400" /> Admin Chat
                       {hasAdminUnread && (
-                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
+                        <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
                       )}
                     </button>
 
-                    {/* Tenant Advertiser Chat */}
-                    {space.is_rented && activeBooking ? (
+                    {(space.is_rented || hasAdvUnread) && (
                       <button
                         onClick={() =>
                           setChatConfig({
@@ -257,17 +283,17 @@ export default function OwnerBoardsPage() {
                             recipientId: advertiser?.id,
                             recipientName: advertiser?.full_name || 'Advertiser',
                             channelType: 'advertiser_owner',
-                            bookingId: activeBooking.id,
+                            bookingId: activeBooking?.id,
                           })
                         }
                         className="relative flex-1 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
                       >
                         <User className="w-3.5 h-3.5" /> Tenant Chat
                         {hasAdvUnread && (
-                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
+                          <span className="absolute -top-1 -right-1 w-3 h-3 bg-rose-500 rounded-full ring-2 ring-slate-900 animate-pulse" />
                         )}
                       </button>
-                    ) : null}
+                    )}
                   </div>
                 </div>
               </div>
@@ -295,12 +321,13 @@ export default function OwnerBoardsPage() {
           bookingId={chatConfig.bookingId}
           onClose={() => {
             setChatConfig(null);
-            fetchSpaces(currentUser.id);
+            if (currentUser?.id) {
+              refreshUnreadCounts(currentUser.id, spaces);
+            }
           }}
         />
       )}
 
-      {/* Confirmation & Status Modal */}
       <StatusModal
         isOpen={popup.isOpen}
         type={popup.type}

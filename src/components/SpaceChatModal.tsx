@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
-import { useNotifications } from '@/context/NotificationContext';
 import { X, Send, Loader2, ShieldCheck, User } from 'lucide-react';
 
 interface SpaceChatModalProps {
@@ -26,7 +25,6 @@ export default function SpaceChatModal({
   bookingId,
   onClose,
 }: SpaceChatModalProps) {
-  const { refreshUnread } = useNotifications();
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -34,21 +32,15 @@ export default function SpaceChatModal({
   const [resolvedRecipientName, setResolvedRecipientName] = useState<string | null>(recipientName || null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const buildConvoKey = (targetRecId: string | null) => {
+  const buildConvoKey = useCallback(() => {
     if (channelType === 'owner_admin') {
       return `owner_admin_${spaceId}`;
     }
-    if (channelType === 'advertiser_admin') {
-      const advId = currentUser.user_metadata?.role === 'admin' ? targetRecId : currentUser.id;
-      return `advertiser_admin_${spaceId}_${advId}`;
-    }
-    // advertiser_owner
     if (bookingId) {
       return `adv_owner_booking_${bookingId}`;
     }
-    const advId = currentUser.user_metadata?.role === 'owner' ? targetRecId : currentUser.id;
-    return `adv_owner_${spaceId}_${advId}`;
-  };
+    return `space_chat_${spaceId}`;
+  }, [channelType, spaceId, bookingId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -63,10 +55,15 @@ export default function SpaceChatModal({
       let targetId = recipientId;
       let targetName = recipientName;
 
-      // 1. Resolve Recipient if not passed explicitly
       if (!targetId) {
         if (channelType === 'owner_admin') {
-          if (currentUser.user_metadata?.role !== 'admin') {
+          const { data: spaceData } = await supabase
+            .from('spaces')
+            .select('owner_id, profiles:owner_id(full_name)')
+            .eq('id', spaceId)
+            .single();
+
+          if (currentUser.id === spaceData?.owner_id) {
             const { data: adminUser } = await supabase
               .from('profiles')
               .select('id, full_name')
@@ -76,32 +73,6 @@ export default function SpaceChatModal({
             targetId = adminUser?.id;
             targetName = adminUser?.full_name || 'Admin Support';
           } else {
-            const { data: spaceData } = await supabase
-              .from('spaces')
-              .select('owner_id, profiles:owner_id(full_name)')
-              .eq('id', spaceId)
-              .single();
-            targetId = spaceData?.owner_id;
-            targetName = (spaceData?.profiles as any)?.full_name || 'Board Owner';
-          }
-        } else if (channelType === 'advertiser_admin') {
-          if (currentUser.user_metadata?.role !== 'admin') {
-            const { data: adminUser } = await supabase
-              .from('profiles')
-              .select('id, full_name')
-              .eq('role', 'admin')
-              .limit(1)
-              .maybeSingle();
-            targetId = adminUser?.id;
-            targetName = adminUser?.full_name || 'Admin Support';
-          }
-        } else if (channelType === 'advertiser_owner') {
-          if (currentUser.user_metadata?.role === 'advertiser') {
-            const { data: spaceData } = await supabase
-              .from('spaces')
-              .select('owner_id, profiles:owner_id(full_name)')
-              .eq('id', spaceId)
-              .single();
             targetId = spaceData?.owner_id;
             targetName = (spaceData?.profiles as any)?.full_name || 'Board Owner';
           }
@@ -112,9 +83,8 @@ export default function SpaceChatModal({
       setResolvedRecipientId(targetId || null);
       setResolvedRecipientName(targetName || null);
 
-      const convoKey = buildConvoKey(targetId || null);
+      const convoKey = buildConvoKey();
 
-      // 2. Load Existing Messages
       const { data } = await supabase
         .from('space_chat_messages')
         .select('*, profiles:sender_id(full_name, role)')
@@ -125,21 +95,20 @@ export default function SpaceChatModal({
         setMessages(data);
       }
 
-      // 3. Mark unread as read
+      // Mark unread messages as read upon modal launch
       await supabase
         .from('space_chat_messages')
         .update({ is_read: true })
         .eq('conversation_key', convoKey)
-        .neq('sender_id', currentUser.id);
+        .neq('sender_id', currentUser.id)
+        .eq('is_read', false);
 
-      await refreshUnread();
       if (isSubscribed) setLoading(false);
       scrollToBottom();
 
-      // 4. Safe Single-Chain Realtime Setup
-      const uniqueTopic = `chat_${convoKey}_${Math.random().toString(36).substring(2, 9)}`;
+      const topic = `modal_${convoKey}_${Date.now()}`;
       channel = supabase
-        .channel(uniqueTopic)
+        .channel(topic)
         .on(
           'postgres_changes',
           {
@@ -157,18 +126,15 @@ export default function SpaceChatModal({
 
             const incoming = { ...payload.new, profiles: profile };
             if (isSubscribed) {
-              setMessages((prev) => {
-                if (prev.some((m) => m.id === incoming.id)) return prev;
-                return [...prev, incoming];
-              });
-            }
+              setMessages((prev) => [...prev, incoming]);
 
-            if (payload.new.sender_id !== currentUser.id) {
-              await supabase
-                .from('space_chat_messages')
-                .update({ is_read: true })
-                .eq('id', payload.new.id);
-              await refreshUnread();
+              // Automatically mark as read if currently open in modal
+              if (payload.new.sender_id !== currentUser.id) {
+                await supabase
+                  .from('space_chat_messages')
+                  .update({ is_read: true })
+                  .eq('id', payload.new.id);
+              }
             }
             scrollToBottom();
           }
@@ -184,7 +150,7 @@ export default function SpaceChatModal({
         supabase.removeChannel(channel);
       }
     };
-  }, [spaceId, channelType, bookingId, recipientId, currentUser.id]);
+  }, [spaceId, channelType, bookingId, recipientId, currentUser.id, buildConvoKey]);
 
   useEffect(() => {
     scrollToBottom();
@@ -196,7 +162,7 @@ export default function SpaceChatModal({
 
     const text = newMessage;
     setNewMessage('');
-    const convoKey = buildConvoKey(resolvedRecipientId);
+    const convoKey = buildConvoKey();
 
     const { error } = await supabase.from('space_chat_messages').insert({
       space_id: spaceId,
@@ -217,7 +183,6 @@ export default function SpaceChatModal({
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4">
       <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col h-[85vh] sm:h-[540px]">
-        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 sm:px-5 sm:py-4 border-b border-slate-800 bg-slate-950/60">
           <div>
             <div className="flex items-center gap-2">
@@ -227,9 +192,7 @@ export default function SpaceChatModal({
                 <User className="w-4 h-4 text-indigo-400" />
               )}
               <h3 className="font-bold text-white text-xs sm:text-sm">
-                {channelType === 'owner_admin' && (resolvedRecipientName ? `Chat with ${resolvedRecipientName}` : 'Owner ↔ Admin Chat')}
-                {channelType === 'advertiser_owner' && (resolvedRecipientName ? `Chat with Owner (${resolvedRecipientName})` : 'Advertiser ↔ Owner Chat')}
-                {channelType === 'advertiser_admin' && (resolvedRecipientName ? `Support Chat: ${resolvedRecipientName}` : 'Advertiser ↔ Support Admin')}
+                {resolvedRecipientName ? `Chat with ${resolvedRecipientName}` : 'Billboard Chat Channel'}
               </h3>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{spaceTitle}</p>
@@ -239,11 +202,10 @@ export default function SpaceChatModal({
           </button>
         </div>
 
-        {/* Message Log */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
           {loading ? (
             <div className="h-full flex items-center justify-center text-xs text-slate-500">
-              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading private discussion...
+              <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading messages...
             </div>
           ) : messages.length === 0 ? (
             <div className="h-full flex items-center justify-center text-xs text-slate-500 text-center px-4">
@@ -276,7 +238,6 @@ export default function SpaceChatModal({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Message Input */}
         <form onSubmit={handleSend} className="p-2.5 sm:p-3 border-t border-slate-800 flex gap-2 bg-slate-950/40">
           <input
             type="text"
