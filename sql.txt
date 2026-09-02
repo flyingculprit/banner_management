@@ -91,3 +91,20 @@ BEGIN
   ON CONFLICT (id) DO UPDATE 
   SET role = 'admin';
 END $$;
+
+
+
+change the admin mail
+
+-- 1. Update the email in public.profiles for any admin role
+UPDATE public.profiles
+SET email = 'suryanofficial26@gmail.com'
+WHERE role = 'admin';
+
+-- 2. Update the auth.users table for the user associated with that profile
+UPDATE auth.users
+SET email = 'suryanofficial26@gmail.com',
+    raw_user_meta_data = jsonb_set(COALESCE(raw_user_meta_data, '{}'::jsonb), '{email}', '"suryanofficial26@gmail.com"')
+WHERE id IN (
+  SELECT id FROM public.profiles WHERE role = 'admin'
+);

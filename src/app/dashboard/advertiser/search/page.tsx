@@ -62,6 +62,7 @@ export default function AdvertiserSearchPage() {
       }
       const script = document.createElement('script');
       script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
       script.onload = () => resolve(true);
       script.onerror = () => resolve(false);
       document.body.appendChild(script);
@@ -107,8 +108,16 @@ export default function AdvertiserSearchPage() {
     setPaymentError(null);
     setPaymentSuccess(null);
 
-    if (!currentUser) {
-      setPaymentError('Please log in to your account to rent this space.');
+    // Re-verify current session fresh from Supabase
+    let activeUser = currentUser;
+    if (!activeUser) {
+      const { data: authData } = await supabase.auth.getUser();
+      activeUser = authData?.user;
+      setCurrentUser(activeUser);
+    }
+
+    if (!activeUser) {
+      setPaymentError('Please log in to your advertiser account to rent this space.');
       return;
     }
 
@@ -124,6 +133,8 @@ export default function AdvertiserSearchPage() {
     const payableAmount = Number(selectedSpace.monthly_rate) * durationMonths;
 
     try {
+      console.log('[Checkout] Creating Razorpay order for space:', selectedSpace.id);
+
       // 1. Create order on the server
       const orderRes = await fetch('/api/razorpay/create-order', {
         method: 'POST',
@@ -139,6 +150,8 @@ export default function AdvertiserSearchPage() {
         throw new Error(orderData.error || 'Failed to initialize payment order with gateway.');
       }
 
+      console.log('[Checkout] Order created successfully:', orderData.id);
+
       // 2. Open Razorpay Portal
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
@@ -149,16 +162,19 @@ export default function AdvertiserSearchPage() {
         order_id: orderData.id,
         image: selectedSpace.space_photo_url || undefined,
         prefill: {
-          name: currentUser.user_metadata?.full_name || currentUser.email?.split('@')[0] || 'Advertiser',
-          email: currentUser.email || '',
-          contact: currentUser.user_metadata?.phone || '',
+          name: activeUser.user_metadata?.full_name || activeUser.email?.split('@')[0] || 'Advertiser',
+          email: activeUser.email || '',
+          contact: activeUser.user_metadata?.phone || '',
         },
         theme: {
           color: '#4f46e5',
         },
         handler: async function (response: any) {
+          console.log('[Checkout] Payment callback received from Razorpay:', response);
+          setPaymentLoading(true);
+
           try {
-            setPaymentLoading(true);
+            console.log('[Checkout] Dispatching verify request to /api/razorpay/verify...');
 
             // 3. Post to verify route: inserts booking, updates space, and triggers all 3 emails
             const verifyRes = await fetch('/api/razorpay/verify', {
@@ -169,34 +185,36 @@ export default function AdvertiserSearchPage() {
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature: response.razorpay_signature,
                 space_id: selectedSpace.id,
-                advertiser_id: currentUser.id,
+                advertiser_id: activeUser.id,
                 duration_months: durationMonths,
                 total_amount: payableAmount,
               }),
             });
 
             const verifyResult = await verifyRes.json();
+            console.log('[Checkout] Verify response received:', verifyResult);
 
             if (!verifyRes.ok || verifyResult.error) {
               throw new Error(verifyResult.error || 'Payment verification failed on server.');
             }
 
-            setPaymentSuccess('Payment confirmed! Invoices have been sent to your email.');
+            setPaymentSuccess('Payment confirmed! Invoices and receipts have been sent to your email.');
             setPaymentLoading(false);
 
             // 4. Redirect cleanly to banners page after dispatch is confirmed
             setTimeout(() => {
               setSelectedSpace(null);
               router.push('/dashboard/advertiser/banners');
-            }, 2000);
+            }, 2500);
           } catch (err: any) {
-            console.error('Payment post-verification error:', err);
-            setPaymentError(err.message || 'Payment received, but verification failed.');
+            console.error('[Checkout] Verification exception:', err);
+            setPaymentError(err.message || 'Payment was recorded, but verification encountered an error.');
             setPaymentLoading(false);
           }
         },
         modal: {
           ondismiss: function () {
+            console.log('[Checkout] Razorpay modal dismissed by user');
             setPaymentLoading(false);
           },
         },
@@ -204,13 +222,14 @@ export default function AdvertiserSearchPage() {
 
       const razorpayInstance = new window.Razorpay(options);
       razorpayInstance.on('payment.failed', function (resp: any) {
+        console.error('[Checkout] Payment failed on gateway:', resp.error);
         setPaymentError(resp.error?.description || 'Payment execution cancelled or failed.');
         setPaymentLoading(false);
       });
       razorpayInstance.open();
     } catch (err: any) {
-      console.error('Checkout error:', err);
-      setPaymentError(err.message || 'Unable to open checkout portal.');
+      console.error('[Checkout] Outer checkout exception:', err);
+      setPaymentError(err.message || 'Unable to initiate checkout.');
       setPaymentLoading(false);
     }
   };

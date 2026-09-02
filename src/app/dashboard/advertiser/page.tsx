@@ -1,11 +1,20 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Script from 'next/script';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import StatusModal from '@/components/StatusModal';
-import { Search, Sparkles, MapPin, CreditCard, Loader2, X } from 'lucide-react';
+import { 
+  TrendingUp, 
+  MapPin, 
+  CreditCard, 
+  Loader2, 
+  Calendar, 
+  X, 
+  ShieldCheck, 
+  CheckCircle2, 
+  AlertCircle,
+  ExternalLink
+} from 'lucide-react';
 
 declare global {
   interface Window {
@@ -13,465 +22,402 @@ declare global {
   }
 }
 
-export default function AdvertiserExplorerPage() {
+interface Space {
+  id: string;
+  area: string;
+  city: string;
+  address?: string;
+  monthly_rate: number;
+  width: number;
+  height: number;
+  location_score?: number;
+  map_link?: string;
+  space_photo_url?: string;
+  is_rented: boolean;
+  status: string;
+  owner_id: string;
+}
+
+export default function AdvertiserOverviewPage() {
   const router = useRouter();
-  const [user, setUser] = useState<any>(null);
-  const [spaces, setSpaces] = useState<any[]>([]);
-  const [filteredSpaces, setFilteredSpaces] = useState<any[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
-  // Filters
-  const [searchDistrict, setSearchDistrict] = useState('');
-  const [searchArea, setSearchArea] = useState('');
-  const [maxBudget, setMaxBudget] = useState('');
+  const [selectedSpace, setSelectedSpace] = useState<Space | null>(null);
+  const [durationMonths, setDurationMonths] = useState<number>(1);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null);
 
-  // Booking Modal State
-  const [selectedSpace, setSelectedSpace] = useState<any>(null);
-  const [campaignName, setCampaignName] = useState('');
-  const [durationMonths, setDurationMonths] = useState('1');
-  const [bannerFile, setBannerFile] = useState<File | null>(null);
-  const [bannerPreview, setBannerPreview] = useState<string | null>(null);
-  const [aiVerifying, setAiVerifying] = useState(false);
-  const [aiResult, setAiResult] = useState<any>(null);
-  const [bookingLoading, setBookingLoading] = useState(false);
-
-  // StatusModal State
-  const [popup, setPopup] = useState<{
-    isOpen: boolean;
-    type: 'success' | 'error' | 'warning' | 'info';
-    title: string;
-    message: string;
-    onConfirm?: () => void;
-  }>({
-    isOpen: false,
-    type: 'info',
-    title: '',
-    message: '',
-  });
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (!user) router.push('/auth/signin');
-      else {
-        setUser(user);
-        fetchSpaces();
+  const loadRazorpaySDK = (): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (typeof window !== 'undefined' && window.Razorpay) {
+        resolve(true);
+        return;
       }
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
     });
-  }, [router]);
+  };
 
-  const fetchSpaces = async () => {
+  const loadSpaces = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase
+    const { data: authData } = await supabase.auth.getUser();
+    setCurrentUser(authData?.user || null);
+
+    const { data, error } = await supabase
       .from('spaces')
       .select('*')
       .eq('status', 'approved')
+      .eq('is_rented', false)
       .order('location_score', { ascending: false });
 
-    if (data) {
+    if (!error && data) {
       setSpaces(data);
-      setFilteredSpaces(data);
     }
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
-    let result = [...spaces];
-    if (searchDistrict) {
-      result = result.filter((s) => s.district?.toLowerCase().includes(searchDistrict.toLowerCase()));
-    }
-    if (searchArea) {
-      result = result.filter((s) =>
-        s.area?.toLowerCase().includes(searchArea.toLowerCase()) ||
-        s.city?.toLowerCase().includes(searchArea.toLowerCase()) ||
-        s.landmark?.toLowerCase().includes(searchArea.toLowerCase())
-      );
-    }
-    if (maxBudget) {
-      result = result.filter((s) => Number(s.monthly_rate) <= Number(maxBudget));
-    }
-    setFilteredSpaces(result);
-  }, [searchDistrict, searchArea, maxBudget, spaces]);
+    loadSpaces();
+  }, [loadSpaces]);
 
-  const handleBannerSelect = (file: File) => {
-    setBannerFile(file);
-    const reader = new FileReader();
-    reader.onload = () => setBannerPreview(reader.result as string);
-    reader.readAsDataURL(file);
-  };
+  const handlePayment = async () => {
+    if (!selectedSpace) return;
+    setPaymentError(null);
+    setPaymentSuccess(null);
 
-  const runAiBannerVerification = async () => {
-    if (!bannerPreview || !selectedSpace) return;
-    setAiVerifying(true);
-    try {
-      const res = await fetch('/api/ai/verify-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          campaignName: campaignName || 'Billboard Campaign',
-          flexWidth: selectedSpace.width,
-          flexHeight: selectedSpace.height,
-          base64Image: bannerPreview,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setAiResult(data);
-    } catch (err: any) {
-      setPopup({
-        isOpen: true,
-        type: 'error',
-        title: 'AI Verification Failed',
-        message: err.message || 'Could not complete AI creative verification.',
-      });
-    } finally {
-      setAiVerifying(false);
-    }
-  };
+    const { data: authData } = await supabase.auth.getUser();
+    const activeUser = authData?.user || currentUser;
 
-  const handleRazorpayPayment = async () => {
-    if (!bannerFile || !user || !selectedSpace) {
-      setPopup({
-        isOpen: true,
-        type: 'warning',
-        title: 'Banner Required',
-        message: 'Please upload an ad banner file before proceeding.',
-      });
+    if (!activeUser) {
+      setPaymentError('Please log in to your account to rent this space.');
       return;
     }
 
-    setBookingLoading(true);
+    setPaymentLoading(true);
+
+    const isLoaded = await loadRazorpaySDK();
+    if (!isLoaded) {
+      setPaymentError('Unable to load payment gateway. Check your internet connection.');
+      setPaymentLoading(false);
+      return;
+    }
+
+    const payableAmount = Number(selectedSpace.monthly_rate) * durationMonths;
 
     try {
-      const totalAmount = Number(selectedSpace.monthly_rate) * Number(durationMonths);
-      const platformCommission = totalAmount * 0.1;
-      const ownerAmount = totalAmount - platformCommission;
-
+      // 1. Create order
       const orderRes = await fetch('/api/razorpay/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amount: totalAmount,
-          currency: 'INR',
-          receipt: `ord_${Date.now()}`,
+          amount: payableAmount,
+          spaceId: selectedSpace.id,
+          durationMonths,
+          advertiserId: activeUser.id,
         }),
       });
+
       const orderData = await orderRes.json();
-      if (!orderRes.ok) throw new Error(orderData.error);
+      if (!orderRes.ok || !orderData.id) {
+        throw new Error(orderData.error || 'Failed to initialize order.');
+      }
 
-      const fileExt = bannerFile.name.split('.').pop();
-      const fileName = `ad_${user.id}_${Date.now()}.${fileExt}`;
-      const { error: uploadError } = await supabase.storage
-        .from('banners')
-        .upload(fileName, bannerFile);
-
-      if (uploadError) throw uploadError;
-
-      const { data: publicData } = supabase.storage
-        .from('banners')
-        .getPublicUrl(fileName);
-
+      // 2. Open Razorpay
       const options = {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
-        currency: orderData.currency,
-        name: 'AdFlex AI Outdoor Network',
-        description: `Booking flex: ${selectedSpace.area}, ${selectedSpace.city}`,
+        currency: orderData.currency || 'INR',
+        name: 'AdFlex AI Billboard Platform',
+        description: `Rental: ${selectedSpace.area}, ${selectedSpace.city} (${durationMonths} Mo)`,
         order_id: orderData.id,
-        handler: async function (response: any) {
-          const startDate = new Date();
-          const endDate = new Date();
-          endDate.setMonth(endDate.getMonth() + Number(durationMonths));
-
-          const { error: bookingErr } = await supabase.from('bookings').insert({
-            space_id: selectedSpace.id,
-            advertiser_id: user.id,
-            campaign_name: campaignName || 'Standard Campaign',
-            start_date: startDate.toISOString().split('T')[0],
-            end_date: endDate.toISOString().split('T')[0],
-            duration_months: Number(durationMonths),
-            total_amount: totalAmount,
-            platform_commission: platformCommission,
-            owner_amount: ownerAmount,
-            banner_photo_url: publicData.publicUrl,
-            ai_content_score: aiResult?.contentScore || 90,
-            ai_verification_details: aiResult || null,
-            ad_approval_status: 'approved',
-            payment_status: 'paid',
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            qr_code_url: `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=ADV-${selectedSpace.id.slice(0, 8)}`,
-            status: 'active',
-          });
-
-          if (bookingErr) throw bookingErr;
-          
-          await supabase.from('spaces').update({ is_rented: true }).eq('id', selectedSpace.id);
-
-          setSelectedSpace(null);
-          setPopup({
-            isOpen: true,
-            type: 'success',
-            title: 'Payment Successful',
-            message: 'Your billboard space has been booked and activated successfully.',
-            onConfirm: () => router.push('/dashboard/advertiser/banners'),
-          });
-        },
         prefill: {
-          name: user.user_metadata?.full_name || 'Advertiser',
-          email: user.email,
+          name: activeUser.user_metadata?.full_name || activeUser.email?.split('@')[0] || 'Advertiser',
+          email: activeUser.email || '',
         },
-        theme: { color: '#4f46e5' },
+        theme: {
+          color: '#4f46e5',
+        },
+        handler: async function (response: any) {
+          setPaymentLoading(true);
+
+          try {
+            // 3. Post to verify route to write to DB and dispatch all 3 emails
+            const verifyRes = await fetch('/api/razorpay/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+                space_id: selectedSpace.id,
+                advertiser_id: activeUser.id,
+                duration_months: durationMonths,
+                total_amount: payableAmount,
+              }),
+            });
+
+            const verifyResult = await verifyRes.json();
+
+            if (!verifyRes.ok || verifyResult.error) {
+              throw new Error(verifyResult.error || 'Payment verification failed on server.');
+            }
+
+            setPaymentSuccess('Payment confirmed! Tax invoices sent to all parties.');
+            setPaymentLoading(false);
+
+            // 4. Redirect only after verification completes
+            setTimeout(() => {
+              setSelectedSpace(null);
+              router.push('/dashboard/advertiser/banners');
+            }, 2500);
+          } catch (err: any) {
+            console.error('Verify error:', err);
+            setPaymentError(err.message || 'Payment completed, but verification failed.');
+            setPaymentLoading(false);
+          }
+        },
+        modal: {
+          ondismiss: function () {
+            setPaymentLoading(false);
+          },
+        },
       };
 
-      const paymentObject = new window.Razorpay(options);
-      paymentObject.open();
-    } catch (err: any) {
-      setPopup({
-        isOpen: true,
-        type: 'error',
-        title: 'Payment Failed',
-        message: err.message || 'An error occurred during payment processing.',
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', function (resp: any) {
+        setPaymentError(resp.error?.description || 'Payment failed.');
+        setPaymentLoading(false);
       });
-    } finally {
-      setBookingLoading(false);
+      rzp.open();
+    } catch (err: any) {
+      console.error('Payment initialization error:', err);
+      setPaymentError(err.message || 'Unable to open checkout portal.');
+      setPaymentLoading(false);
     }
   };
 
   return (
-    <>
-      <Script src="https://checkout.razorpay.com/v1/checkout.js" />
+    <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-white mb-2">Explore Outdoor Flex Billboard Spaces</h1>
-        <p className="text-xs text-slate-400 mb-6">Browse verified locations across districts with Gemini AI location intelligence.</p>
+        <h1 className="text-2xl font-bold text-white mb-2">Advertiser Dashboard</h1>
+        <p className="text-xs text-slate-400">
+          Explore top-performing billboard spaces, check AI traffic scores, and book spaces directly.
+        </p>
+      </div>
 
-        {/* Filter Card */}
-        <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl mb-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <input
-            type="text"
-            placeholder="Search District (e.g. Karur)"
-            value={searchDistrict}
-            onChange={(e) => setSearchDistrict(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
-          <input
-            type="text"
-            placeholder="Search Area / Landmark (Bus Stand, Roundabout...)"
-            value={searchArea}
-            onChange={(e) => setSearchArea(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
-          <input
-            type="number"
-            placeholder="Max Monthly Rate (₹)"
-            value={maxBudget}
-            onChange={(e) => setMaxBudget(e.target.value)}
-            className="p-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white"
-          />
+      {loading ? (
+        <div className="flex flex-col items-center justify-center p-20 text-slate-500 gap-3">
+          <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+          <span className="text-xs">Loading billboard inventory...</span>
         </div>
-
-        {/* Boards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {loading ? (
-            <div className="col-span-full py-16 flex items-center justify-center gap-2 text-slate-500 text-xs">
-              <Loader2 className="w-4 h-4 animate-spin text-indigo-500" /> Loading available spaces...
-            </div>
-          ) : filteredSpaces.length === 0 ? (
-            <div className="col-span-full py-12 text-center bg-slate-900/50 rounded-2xl border border-slate-800 text-slate-400 text-xs">
-              No billboard boards match your filters.
-            </div>
-          ) : (
-            filteredSpaces.map((space) => (
-              <div key={space.id} className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col justify-between">
-                <div className="h-44 bg-slate-950 relative">
-                  {space.space_photo_url ? (
-                    <img src={space.space_photo_url} alt={space.area} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-xs text-slate-600">No Image Available</div>
-                  )}
-
-                  <div className="absolute top-3 right-3 flex items-center gap-1.5">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
-                      <Sparkles className="w-3 h-3 inline mr-1" /> Score {space.location_score || 85}/100
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-5 flex-1 flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <h3 className="font-bold text-white text-base">{space.area}, {space.city}</h3>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                        space.is_rented ? 'bg-amber-500/15 text-amber-400' : 'bg-emerald-500/15 text-emerald-400'
-                      }`}>
-                        {space.is_rented ? 'Already Rented' : 'Available'}
-                      </span>
-                    </div>
-
-                    <p className="text-xs text-slate-400 line-clamp-1">{space.address}</p>
-
-                    <div className="grid grid-cols-2 gap-2 mt-4 text-xs">
-                      <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Dimensions</span>
-                        <span className="text-slate-200 font-semibold">{space.width} × {space.height} ft</span>
-                      </div>
-                      <div className="bg-slate-950 p-2 rounded-lg border border-slate-800">
-                        <span className="text-slate-500 text-[10px] block">Visibility</span>
-                        <span className="text-slate-200 font-semibold">{space.road_visibility}</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex items-baseline justify-between">
-                      <span className="text-lg font-extrabold text-cyan-400">
-                        ₹{Number(space.monthly_rate).toLocaleString()} <span className="text-xs text-slate-400 font-normal">/ month</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 pt-4 border-t border-slate-800">
-                    {space.is_rented ? (
-                      <button disabled className="w-full py-2.5 bg-slate-800 text-slate-500 rounded-xl text-xs font-semibold cursor-not-allowed">
-                        Currently Occupied / Unavailable
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          setSelectedSpace(space);
-                          setAiResult(null);
-                          setBannerFile(null);
-                          setBannerPreview(null);
-                        }}
-                        className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition"
-                      >
-                        Book This Space →
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
+      ) : spaces.length === 0 ? (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-500 text-xs">
+          No available billboards at the moment.
         </div>
-
-        {/* Booking Modal */}
-        {selectedSpace && (
-          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl p-6 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
-                <div>
-                  <h3 className="font-bold text-white text-base">Book Billboard</h3>
-                  <p className="text-xs text-slate-400">{selectedSpace.area}, {selectedSpace.city} ({selectedSpace.width} × {selectedSpace.height} ft)</p>
-                </div>
-                <button onClick={() => setSelectedSpace(null)} className="text-slate-400 hover:text-white">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="space-y-3.5 text-xs">
-                <div>
-                  <label className="text-slate-400 block mb-1">Campaign Name</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Festival Promotional Campaign"
-                    value={campaignName}
-                    onChange={(e) => setCampaignName(e.target.value)}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white"
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {spaces.map((space) => (
+            <div
+              key={space.id}
+              className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col hover:border-slate-700 transition group shadow-lg"
+            >
+              <div className="h-48 w-full bg-slate-950 relative overflow-hidden">
+                {space.space_photo_url ? (
+                  <img
+                    src={space.space_photo_url}
+                    alt={space.area}
+                    className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                   />
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1">Rental Duration</label>
-                  <select
-                    value={durationMonths}
-                    onChange={(e) => setDurationMonths(e.target.value)}
-                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-lg text-white"
-                  >
-                    <option value="1">1 Month (₹{Number(selectedSpace.monthly_rate).toLocaleString()})</option>
-                    <option value="2">2 Months (₹{(Number(selectedSpace.monthly_rate) * 2).toLocaleString()})</option>
-                    <option value="3">3 Months (₹{(Number(selectedSpace.monthly_rate) * 3).toLocaleString()})</option>
-                    <option value="6">6 Months (₹{(Number(selectedSpace.monthly_rate) * 6).toLocaleString()})</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-slate-400 block mb-1">Upload Ad Banner Creative</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => e.target.files?.[0] && handleBannerSelect(e.target.files[0])}
-                    className="w-full p-2 bg-slate-950 border border-slate-800 rounded-lg text-slate-300"
-                  />
-                </div>
-
-                {bannerPreview && (
-                  <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/30 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-indigo-300 flex items-center gap-1">
-                        <Sparkles className="w-3.5 h-3.5 text-cyan-400" /> AI Ad Content Verification
-                      </span>
-                      <button
-                        type="button"
-                        onClick={runAiBannerVerification}
-                        disabled={aiVerifying}
-                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-medium"
-                      >
-                        {aiVerifying ? 'Analyzing Banner...' : 'Verify Creative'}
-                      </button>
-                    </div>
-
-                    {aiResult && (
-                      <div className="text-xs space-y-1 pt-2 border-t border-indigo-900/60">
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Content Score:</span>
-                          <span className="font-bold text-cyan-400">{aiResult.contentScore}/100</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Quality:</span>
-                          <span className="text-emerald-400 font-medium">{aiResult.imageQuality}</span>
-                        </div>
-                        <p className="text-[11px] text-slate-400 italic">{aiResult.remarks}</p>
-                      </div>
-                    )}
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-600 text-xs font-mono">
+                    No Billboard Image
                   </div>
                 )}
+                <div className="absolute top-3 right-3 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-full text-[11px] font-bold text-cyan-400 border border-slate-800 flex items-center gap-1">
+                  <TrendingUp className="w-3 h-3 text-cyan-400" />
+                  Score: {space.location_score || 0}/100
+                </div>
+              </div>
 
-                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-                  <div className="flex justify-between text-slate-400">
-                    <span>Rent Total:</span>
-                    <span>₹{(Number(selectedSpace.monthly_rate) * Number(durationMonths)).toLocaleString()}</span>
+              <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                <div>
+                  <h3 className="font-bold text-white text-base">{space.area}, {space.city}</h3>
+                  {space.address && (
+                    <p className="text-slate-400 text-xs mt-1 line-clamp-2">{space.address}</p>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800 text-xs">
+                  <div>
+                    <span className="text-slate-500 text-[10px] block uppercase font-medium">Dimensions</span>
+                    <span className="text-slate-300 font-mono">{space.width} × {space.height} ft</span>
                   </div>
-                  <div className="flex justify-between text-white font-bold pt-1 border-t border-slate-800">
-                    <span>Total Amount Payable:</span>
-                    <span className="text-emerald-400">₹{(Number(selectedSpace.monthly_rate) * Number(durationMonths)).toLocaleString()}</span>
+                  <div>
+                    <span className="text-slate-500 text-[10px] block uppercase font-medium">Rate / Month</span>
+                    <span className="text-indigo-400 font-bold">₹{Number(space.monthly_rate).toLocaleString('en-IN')}</span>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={bookingLoading}
-                  onClick={handleRazorpayPayment}
-                  className="w-full py-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white font-semibold rounded-xl flex items-center justify-center gap-2"
-                >
-                  {bookingLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CreditCard className="w-4 h-4" /> Pay with Razorpay & Confirm</>}
-                </button>
+                <div className="flex items-center justify-between gap-3 pt-2">
+                  {space.map_link ? (
+                    <a
+                      href={space.map_link}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-medium transition"
+                    >
+                      <MapPin className="w-3.5 h-3.5" /> Map <ExternalLink className="w-3 h-3" />
+                    </a>
+                  ) : (
+                    <span className="text-[11px] text-slate-600">No GPS Link</span>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      setSelectedSpace(space);
+                      setDurationMonths(1);
+                      setPaymentError(null);
+                      setPaymentSuccess(null);
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition shadow-md shadow-indigo-600/20"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" /> Rent Billboard
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+      )}
 
-        {/* Custom Status Modal for Notifications & Confirmations */}
-        <StatusModal
-          isOpen={popup.isOpen}
-          type={popup.type}
-          title={popup.title}
-          message={popup.message}
-          onConfirm={popup.onConfirm}
-          onClose={() => {
-            if (popup.onConfirm) popup.onConfirm();
-            setPopup((prev) => ({ ...prev, isOpen: false }));
-          }}
-        />
-      </div>
-    </>
+      {/* Checkout Modal */}
+      {selectedSpace && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-950/50">
+              <div>
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-indigo-400" /> Book Billboard Rental
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">Secure Escrow Reservation</p>
+              </div>
+              <button
+                onClick={() => setSelectedSpace(null)}
+                disabled={paymentLoading}
+                className="text-slate-400 hover:text-white transition p-1.5 rounded-lg hover:bg-slate-800 disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {paymentError && (
+                <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs flex items-center gap-3">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{paymentError}</span>
+                </div>
+              )}
+
+              {paymentSuccess && (
+                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs flex items-center gap-3">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{paymentSuccess}</span>
+                </div>
+              )}
+
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800">
+                <h3 className="font-bold text-white text-base">{selectedSpace.area}, {selectedSpace.city}</h3>
+                {selectedSpace.address && (
+                  <p className="text-xs text-slate-400 mt-1 line-clamp-1">{selectedSpace.address}</p>
+                )}
+                <div className="grid grid-cols-2 gap-3 mt-4 text-xs">
+                  <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-500 text-[10px] block font-medium">Size</span>
+                    <span className="text-slate-200 font-semibold">{selectedSpace.width} × {selectedSpace.height} ft</span>
+                  </div>
+                  <div className="bg-slate-900 p-2.5 rounded-xl border border-slate-800">
+                    <span className="text-slate-500 text-[10px] block font-medium">Monthly Rate</span>
+                    <span className="text-indigo-400 font-semibold">₹{Number(selectedSpace.monthly_rate).toLocaleString('en-IN')}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-indigo-400" /> Select Duration (Months)
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 3, 6, 12].map((months) => (
+                    <button
+                      key={months}
+                      type="button"
+                      onClick={() => setDurationMonths(months)}
+                      className={`py-2.5 rounded-xl text-xs font-semibold border transition ${
+                        durationMonths === months
+                          ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/30'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {months} {months === 1 ? 'Mo' : 'Mos'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-indigo-950/40 to-slate-950 p-4 rounded-2xl border border-indigo-900/40 space-y-2">
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>Monthly Rate</span>
+                  <span>₹{Number(selectedSpace.monthly_rate).toLocaleString('en-IN')}</span>
+                </div>
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>Duration</span>
+                  <span>× {durationMonths} month(s)</span>
+                </div>
+                <div className="border-t border-slate-800 pt-2 flex justify-between items-center text-sm font-bold text-white">
+                  <span>Total Payable</span>
+                  <span className="text-base text-cyan-400 font-extrabold">
+                    ₹{(Number(selectedSpace.monthly_rate) * durationMonths).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-800 bg-slate-950/40 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedSpace(null)}
+                disabled={paymentLoading}
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handlePayment}
+                disabled={paymentLoading}
+                className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition disabled:opacity-50"
+              >
+                {paymentLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Verifying & Sending...
+                  </>
+                ) : (
+                  <>
+                    <CreditCard className="w-4 h-4" /> Pay ₹{(Number(selectedSpace.monthly_rate) * durationMonths).toLocaleString('en-IN')}
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
