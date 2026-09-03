@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import SpaceChatModal from '@/components/SpaceChatModal';
-import { Layers, CheckCircle, Clock, IndianRupee, Bell, MessageSquare, Check, X } from 'lucide-react';
+import { Layers, CheckCircle, Clock, IndianRupee, Bell, MessageSquare } from 'lucide-react';
 
 export default function OwnerOverviewPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -17,45 +17,74 @@ export default function OwnerOverviewPage() {
   const [notifications, setNotifications] = useState<any[]>([]);
   const [activeChat, setActiveChat] = useState<any>(null);
 
-  useEffect(() => {
-    async function loadOwnerData() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      setCurrentUser(user);
+  const loadOwnerData = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setCurrentUser(user);
 
-      const { data: spaces } = await supabase
-        .from('spaces')
-        .select('*, bookings(*)')
-        .eq('owner_id', user.id);
+    // 1. Fetch owner spaces
+    const { data: spaces } = await supabase
+      .from('spaces')
+      .select('id, status, is_rented')
+      .eq('owner_id', user.id);
 
-      if (spaces) {
-        const totalEarned = spaces.reduce((acc, curr) => {
-          const paidBookings = curr.bookings?.filter((b: any) => b.payment_status === 'paid') || [];
-          return acc + paidBookings.reduce((sum: number, b: any) => sum + (b.owner_amount || 0), 0);
-        }, 0);
+    // 2. Fetch bookings for this owner's spaces
+    const { data: ownerBookings } = await supabase
+      .from('bookings')
+      .select('total_amount, owner_amount, payment_status, spaces!inner(owner_id)')
+      .eq('spaces.owner_id', user.id);
 
-        setStats({
-          total: spaces.length,
-          approved: spaces.filter((s) => s.status === 'approved').length,
-          rented: spaces.filter((s) => s.is_rented).length,
-          totalEarned,
-        });
-      }
+    const paidBookings = ownerBookings?.filter(
+      (b: any) => b.payment_status?.toLowerCase() === 'paid'
+    ) || [];
 
-      // Fetch unread messages from Admin or Advertisers
-      const { data: unreadMsgs } = await supabase
-        .from('space_chat_messages')
-        .select('*, spaces!inner(owner_id, area, city), profiles:sender_id(full_name, role)')
-        .eq('spaces.owner_id', user.id)
-        .eq('is_read', false)
-        .neq('sender_id', user.id)
-        .order('created_at', { ascending: false });
+    const totalEarned = paidBookings.reduce((sum: number, b: any) => {
+      const amount = Number(b.owner_amount) > 0
+        ? Number(b.owner_amount)
+        : Math.round(Number(b.total_amount || 0) * 0.9);
+      return sum + amount;
+    }, 0);
 
-      setNotifications(unreadMsgs || []);
+    if (spaces) {
+      setStats({
+        total: spaces.length,
+        approved: spaces.filter((s) => s.status === 'approved').length,
+        rented: spaces.filter((s) => s.is_rented).length,
+        totalEarned,
+      });
     }
 
-    loadOwnerData();
+    // 3. Fetch unread messages
+    const { data: unreadMsgs } = await supabase
+      .from('space_chat_messages')
+      .select('*, spaces!inner(owner_id, area, city), profiles:sender_id(id, full_name, role)')
+      .eq('spaces.owner_id', user.id)
+      .in('channel_type', ['owner_admin', 'advertiser_owner'])
+      .eq('is_read', false)
+      .neq('sender_id', user.id)
+      .order('created_at', { ascending: false });
+
+    setNotifications(unreadMsgs || []);
   }, []);
+
+  useEffect(() => {
+    loadOwnerData();
+
+    const channel = supabase
+      .channel(`owner-dashboard-alerts-${Date.now()}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'space_chat_messages' },
+        () => {
+          loadOwnerData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadOwnerData]);
 
   return (
     <div>
@@ -89,7 +118,7 @@ export default function OwnerOverviewPage() {
           <div className="flex items-center gap-3 text-slate-400 text-xs">
             <IndianRupee className="w-4 h-4 text-emerald-400" /> Total Payout Earned
           </div>
-          <div className="text-2xl font-bold text-emerald-400 mt-3">₹{stats.totalEarned.toLocaleString()}</div>
+          <div className="text-2xl font-bold text-emerald-400 mt-3">₹{stats.totalEarned.toLocaleString('en-IN')}</div>
         </div>
       </div>
 
@@ -111,7 +140,7 @@ export default function OwnerOverviewPage() {
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-semibold text-xs text-white">{n.profiles?.full_name}</span>
+                    <span className="font-semibold text-xs text-white">{n.profiles?.full_name || 'User'}</span>
                     <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 uppercase font-mono">
                       {n.channel_type === 'owner_admin' ? 'Support Admin' : 'Tenant Advertiser'}
                     </span>
@@ -124,8 +153,10 @@ export default function OwnerOverviewPage() {
                   onClick={() =>
                     setActiveChat({
                       spaceId: n.space_id,
-                      spaceTitle: `${n.spaces?.area}, ${n.spaces?.city}`,
+                      spaceTitle: `${n.spaces?.area || 'Billboard'}, ${n.spaces?.city || ''}`,
                       channelType: n.channel_type,
+                      recipientId: n.profiles?.id,
+                      recipientName: n.profiles?.full_name,
                       bookingId: n.booking_id,
                     })
                   }
@@ -144,9 +175,14 @@ export default function OwnerOverviewPage() {
           spaceId={activeChat.spaceId}
           spaceTitle={activeChat.spaceTitle}
           currentUser={currentUser}
+          recipientId={activeChat.recipientId}
+          recipientName={activeChat.recipientName}
           channelType={activeChat.channelType}
           bookingId={activeChat.bookingId}
-          onClose={() => setActiveChat(null)}
+          onClose={() => {
+            setActiveChat(null);
+            loadOwnerData();
+          }}
         />
       )}
     </div>

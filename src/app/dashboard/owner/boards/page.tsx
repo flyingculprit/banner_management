@@ -40,7 +40,6 @@ export default function OwnerBoardsPage() {
 
   const [editingSpace, setEditingSpace] = useState<any>(null);
 
-  // Fetch unread messages scoped to all boards owned by this user
   const refreshUnreadCounts = useCallback(async (userId: string, currentSpaces: any[]) => {
     if (!currentSpaces || currentSpaces.length === 0) return;
 
@@ -50,6 +49,7 @@ export default function OwnerBoardsPage() {
       .from('space_chat_messages')
       .select('space_id, channel_type, sender_id')
       .in('space_id', spaceIds)
+      .in('channel_type', ['owner_admin', 'advertiser_owner'])
       .eq('is_read', false)
       .neq('sender_id', userId);
 
@@ -61,7 +61,7 @@ export default function OwnerBoardsPage() {
     unreadData.forEach((m) => {
       if (m.channel_type === 'owner_admin') {
         adminCounts[m.space_id] = (adminCounts[m.space_id] || 0) + 1;
-      } else {
+      } else if (m.channel_type === 'advertiser_owner') {
         advCounts[m.space_id] = (advCounts[m.space_id] || 0) + 1;
       }
     });
@@ -103,7 +103,6 @@ export default function OwnerBoardsPage() {
     return () => subscription.unsubscribe();
   }, [fetchSpaces]);
 
-  // Realtime subscription for incoming messages
   useEffect(() => {
     if (!currentUser?.id || spaces.length === 0) return;
 
@@ -195,8 +194,14 @@ export default function OwnerBoardsPage() {
           spaces.map((space) => {
             const hasAdminUnread = (adminUnreadCounts[space.id] || 0) > 0;
             const hasAdvUnread = (advertiserUnreadCounts[space.id] || 0) > 0;
-            const activeBooking = space.bookings?.find((b: any) => b.status === 'active' || b.payment_status === 'paid');
+            
+            const activeBooking = space.bookings?.find((b: any) => 
+              b.payment_status?.toLowerCase() === 'paid' || b.status?.toLowerCase() === 'active'
+            ) || space.bookings?.[0];
+
             const advertiser = activeBooking?.profiles;
+            const grossRate = Number(space.monthly_rate || 0);
+            const netRate = Math.round(grossRate * 0.9);
 
             return (
               <div key={space.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
@@ -213,9 +218,14 @@ export default function OwnerBoardsPage() {
                     >
                       {space.status}
                     </span>
-                    <span className="text-xs font-bold text-cyan-400">
-                      ₹{Number(space.monthly_rate).toLocaleString()} /mo
-                    </span>
+                    <div className="text-right">
+                      <span className="text-xs font-bold text-cyan-400 block">
+                        ₹{grossRate.toLocaleString('en-IN')} /mo
+                      </span>
+                      <span className="text-[10px] font-semibold text-emerald-400 block">
+                        Net: ₹{netRate.toLocaleString('en-IN')} /mo (90%)
+                      </span>
+                    </div>
                   </div>
 
                   <h3 className="font-bold text-white text-base">{space.area}, {space.city}</h3>
@@ -274,7 +284,7 @@ export default function OwnerBoardsPage() {
                       )}
                     </button>
 
-                    {(space.is_rented || hasAdvUnread) && (
+                    {(space.is_rented || activeBooking || hasAdvUnread) && (
                       <button
                         onClick={() =>
                           setChatConfig({
@@ -322,7 +332,7 @@ export default function OwnerBoardsPage() {
           onClose={() => {
             setChatConfig(null);
             if (currentUser?.id) {
-              refreshUnreadCounts(currentUser.id, spaces);
+              fetchSpaces(currentUser.id);
             }
           }}
         />

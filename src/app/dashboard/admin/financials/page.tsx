@@ -13,7 +13,7 @@ export default function AdminFinancialsPage() {
       setLoading(true);
       const { data } = await supabase
         .from('bookings')
-        .select('*, spaces(area, city, profiles:owner_id(full_name)), profiles:advertiser_id(full_name)')
+        .select('*, spaces(area, city, owner_id, profiles:owner_id(full_name)), profiles:advertiser_id(full_name)')
         .order('created_at', { ascending: false });
 
       if (data) setFinancials(data);
@@ -55,25 +55,38 @@ export default function AdminFinancialsPage() {
                   <td colSpan={8} className="p-8 text-center text-slate-500">No transaction records found.</td>
                 </tr>
               ) : (
-                financials.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-800/40 transition">
-                    <td className="p-4">
-                      <div className="font-semibold text-white">{item.campaign_name}</div>
-                      <div className="font-mono text-[10px] text-slate-500">{item.razorpay_payment_id || item.id.slice(0, 8)}</div>
-                    </td>
-                    <td className="p-4 text-slate-300">{item.profiles?.full_name}</td>
-                    <td className="p-4 text-slate-300">{item.spaces?.area}, {item.spaces?.city}</td>
-                    <td className="p-4 font-medium text-amber-300">{item.spaces?.profiles?.full_name}</td>
-                    <td className="p-4 font-semibold text-cyan-400">₹{Number(item.total_amount).toLocaleString()}</td>
-                    <td className="p-4 font-semibold text-emerald-400">₹{Number(item.platform_commission).toLocaleString()}</td>
-                    <td className="p-4 font-semibold text-purple-400">₹{Number(item.owner_amount).toLocaleString()}</td>
-                    <td className="p-4">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400">
-                        {item.payment_status}
-                      </span>
-                    </td>
-                  </tr>
-                ))
+                financials.map((item) => {
+                  const gross = Number(item.total_amount || 0);
+                  const fee = Number(item.platform_commission) > 0
+                    ? Number(item.platform_commission)
+                    : Math.round(gross * 0.1);
+                  const net = Number(item.owner_amount) > 0
+                    ? Number(item.owner_amount)
+                    : gross - fee;
+
+                  const campaignTitle = item.campaign_name || `${item.spaces?.area || 'Billboard'} Campaign`;
+                  const paymentRef = item.payment_id || item.razorpay_payment_id || item.id.slice(0, 8).toUpperCase();
+
+                  return (
+                    <tr key={item.id} className="hover:bg-slate-800/40 transition">
+                      <td className="p-4">
+                        <div className="font-semibold text-white">{campaignTitle}</div>
+                        <div className="font-mono text-[10px] text-slate-500">#{paymentRef}</div>
+                      </td>
+                      <td className="p-4 text-slate-300">{item.profiles?.full_name || 'Advertiser'}</td>
+                      <td className="p-4 text-slate-300">{item.spaces?.area || 'Location'}, {item.spaces?.city || ''}</td>
+                      <td className="p-4 font-medium text-amber-300">{item.spaces?.profiles?.full_name || 'Board Owner'}</td>
+                      <td className="p-4 font-semibold text-cyan-400">₹{gross.toLocaleString('en-IN')}</td>
+                      <td className="p-4 font-semibold text-emerald-400">₹{fee.toLocaleString('en-IN')}</td>
+                      <td className="p-4 font-semibold text-purple-400">₹{net.toLocaleString('en-IN')}</td>
+                      <td className="p-4">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/10 text-emerald-400">
+                          {item.payment_status || 'PAID'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

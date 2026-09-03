@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     let advertiser_id = '';
     let duration_months = 1;
     let total_amount = 0;
+    let banner_image_url: string | null = null;
     let isFormRedirect = false;
 
     const contentType = req.headers.get('content-type') || '';
@@ -51,24 +52,26 @@ export async function POST(req: Request) {
       advertiser_id = body.advertiser_id;
       duration_months = Number(body.duration_months) || 1;
       total_amount = Number(body.total_amount) || 0;
+      banner_image_url = body.banner_image_url || null;
     } else {
-      // Handle Razorpay direct browser POST redirect
       isFormRedirect = true;
       const formData = await req.formData();
       razorpay_order_id = formData.get('razorpay_order_id') as string;
       razorpay_payment_id = formData.get('razorpay_payment_id') as string;
       razorpay_signature = formData.get('razorpay_signature') as string;
+      banner_image_url = (formData.get('banner_image_url') as string) || null;
     }
 
     console.log('[Payment Verify Route] Processing payment:', {
       razorpay_payment_id,
       razorpay_order_id,
       space_id,
+      banner_image_url,
     });
 
     const supabaseAdmin = getAdminSupabase();
 
-    // 1. Signature check
+    // 1. Signature verification
     if (process.env.RAZORPAY_KEY_SECRET && razorpay_order_id && razorpay_signature) {
       const generatedSignature = crypto
         .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -76,7 +79,7 @@ export async function POST(req: Request) {
         .digest('hex');
 
       if (generatedSignature !== razorpay_signature) {
-        console.error('[Payment Verify] Invalid signature mismatch');
+        console.error('[Payment Verify] Signature mismatch');
         if (isFormRedirect) {
           return NextResponse.redirect(new URL('/dashboard/advertiser?error=invalid_signature', req.url));
         }
@@ -84,7 +87,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // If redirected via form, resolve space and advertiser from Razorpay order notes or active session
+    // Resolve space fallback if redirect payload is missing IDs
     if (!space_id || !advertiser_id) {
       const { data: recentSpaces } = await supabaseAdmin
         .from('spaces')
@@ -97,7 +100,15 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2. Insert booking record in Supabase
+    // Compute start_date and end_date to satisfy NOT NULL constraints
+    const startDateObj = new Date();
+    const endDateObj = new Date();
+    endDateObj.setMonth(endDateObj.getMonth() + (Number(duration_months) || 1));
+
+    const start_date = startDateObj.toISOString().split('T')[0];
+    const end_date = endDateObj.toISOString().split('T')[0];
+
+    // 2. Insert booking record with banner creative image and required dates
     const { data: booking, error: bookingErr } = await supabaseAdmin
       .from('bookings')
       .insert({
@@ -108,21 +119,29 @@ export async function POST(req: Request) {
         payment_status: 'paid',
         payment_id: razorpay_payment_id,
         status: 'active',
+        start_date,
+        end_date,
+        banner_image_url: banner_image_url,
+        ad_image_url: banner_image_url,
       })
       .select()
       .single();
 
     if (bookingErr) {
       console.error('[Payment Verify] Booking database insert error:', bookingErr);
+      if (isFormRedirect) {
+        return NextResponse.redirect(new URL('/dashboard/advertiser?error=booking_insert_failed', req.url));
+      }
+      return NextResponse.json({ error: bookingErr.message }, { status: 500 });
     }
 
-    // 3. Update space status
+    // 3. Mark space as rented
     await supabaseAdmin
       .from('spaces')
       .update({ is_rented: true })
       .eq('id', space_id);
 
-    // 4. Fetch Space Details
+    // 4. Retrieve Space Details
     const { data: spaceData } = await supabaseAdmin
       .from('spaces')
       .select('area, city, owner_id')
@@ -135,7 +154,7 @@ export async function POST(req: Request) {
     let advertiserName: string = 'Advertiser';
     let adminEmail: string | null = null;
 
-    // 5. Fetch Owner Email from profiles & auth
+    // 5. Retrieve Owner Email
     if (spaceData?.owner_id) {
       const { data: ownProf } = await supabaseAdmin
         .from('profiles')
@@ -152,7 +171,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 6. Fetch Advertiser Email from profiles & auth
+    // 6. Retrieve Advertiser Email
     if (advertiser_id) {
       const { data: advProf } = await supabaseAdmin
         .from('profiles')
@@ -169,7 +188,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 7. Fetch Admin Email from Supabase (role = 'admin')
+    // 7. Retrieve Admin Email
     const { data: adminProf } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -184,9 +203,8 @@ export async function POST(req: Request) {
       adminEmail = adminAuth?.user?.email || null;
     }
 
-    // Final fallback for admin email
     if (!adminEmail) {
-      adminEmail = 'surya260104n@gmail.com';
+      adminEmail = 'hdaprojectofficial@gmail.com';
     }
 
     const refNumber = booking?.id ? String(booking.id).slice(0, 8).toUpperCase() : 'REC-' + Date.now().toString().slice(-6);
@@ -220,18 +238,19 @@ export async function POST(req: Request) {
               <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin: 16px 0; font-size: 13px; line-height: 1.8;">
                 <div><strong>Invoice Ref:</strong> #${refNumber}</div>
                 <div><strong>Billboard:</strong> ${area}, ${city}</div>
-                <div><strong>Rental Period:</strong> ${duration_months} Month(s)</div>
+                <div><strong>Rental Period:</strong> ${duration_months} Month(s) (${start_date} to ${end_date})</div>
                 <div><strong>Payment Ref:</strong> ${razorpay_payment_id}</div>
                 <div><strong>Date:</strong> ${billDate}</div>
+                ${banner_image_url ? `<div><strong>Banner Creative:</strong> <a href="${banner_image_url}" target="_blank" style="color:#4f46e5;">View Uploaded Ad</a></div>` : ''}
               </div>
-              <p style="font-size: 12px; color: #64748b;">You can coordinate banner design with the owner via Tenant Chat.</p>
+              <p style="font-size: 12px; color: #64748b;">You can coordinate installation and maintenance with the owner via Tenant Chat.</p>
             </div>
           `,
         })
       );
     }
 
-    // B. Email to Owner
+    // B. Email to Space Owner
     if (isValidDeliverableEmail(ownerEmail)) {
       emailTasks.push(
         transporter.sendMail({
@@ -248,6 +267,7 @@ export async function POST(req: Request) {
                 <div><strong>Gross Value:</strong> ₹${Number(total_amount).toLocaleString('en-IN')}</div>
                 <div><strong>Advertiser:</strong> ${advertiserName}</div>
                 <div><strong>Payout:</strong> Secured in Escrow</div>
+                ${banner_image_url ? `<div><strong>Ad Creative:</strong> <a href="${banner_image_url}" target="_blank" style="color:#15803d;">Download Graphic</a></div>` : ''}
               </div>
             </div>
           `,
@@ -255,7 +275,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // C. Email to Admin
+    // C. Email to Platform Administrator
     if (isValidDeliverableEmail(adminEmail)) {
       emailTasks.push(
         transporter.sendMail({
@@ -271,6 +291,7 @@ export async function POST(req: Request) {
               <p><strong>Billboard:</strong> ${area}, ${city}</p>
               <p><strong>Advertiser:</strong> ${advertiserName} (${advertiserEmail})</p>
               <p><strong>Owner:</strong> ${ownerName} (${ownerEmail})</p>
+              ${banner_image_url ? `<p><strong>Ad Graphic:</strong> <a href="${banner_image_url}" target="_blank">View File</a></p>` : ''}
             </div>
           `,
         })

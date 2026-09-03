@@ -28,7 +28,6 @@ export default function AdminSupportCenterPage() {
     setCurrentUser(user);
 
     if (tab === 'advertiser_admin') {
-      // 1. Fetch all Advertiser ↔ Admin messages
       const { data: messages } = await supabase
         .from('space_chat_messages')
         .select('*, spaces(id, area, city), sender:sender_id(id, full_name, phone, role), receiver:receiver_id(id, full_name, phone, role)')
@@ -39,9 +38,8 @@ export default function AdminSupportCenterPage() {
       const unreadMap: { [key: string]: number } = {};
 
       messages?.forEach((msg) => {
-        // Group uniquely by conversation key (or space + non-admin party)
         const nonAdminUser = msg.sender?.role !== 'admin' ? msg.sender : msg.receiver;
-        const groupKey = msg.conversation_key || `${msg.space_id}_${nonAdminUser?.id}`;
+        const groupKey = msg.conversation_key || `${msg.space_id}_${nonAdminUser?.id || msg.sender_id}`;
 
         if (!grouped[groupKey]) {
           grouped[groupKey] = {
@@ -51,7 +49,6 @@ export default function AdminSupportCenterPage() {
           };
         }
 
-        // Check if this specific message is unread and sent by a non-admin
         if (!msg.is_read && msg.sender_id !== user?.id) {
           unreadMap[groupKey] = (unreadMap[groupKey] || 0) + 1;
         }
@@ -60,13 +57,11 @@ export default function AdminSupportCenterPage() {
       setInquiries(Object.values(grouped));
       setUnreadPerCard(unreadMap);
     } else {
-      // 2. Fetch Advertiser ↔ Owner Booking threads
       const { data: bookings } = await supabase
         .from('bookings')
         .select('*, spaces(id, area, city, profiles:owner_id(id, full_name, phone)), profiles:advertiser_id(id, full_name, phone)')
         .order('created_at', { ascending: false });
 
-      // Calculate unread for each booking
       const { data: unreadAdvOwner } = await supabase
         .from('space_chat_messages')
         .select('booking_id')
@@ -89,7 +84,6 @@ export default function AdminSupportCenterPage() {
   useEffect(() => {
     fetchInquiries();
 
-    // Listen for incoming live chat messages
     const channel = supabase
       .channel(`support-live-cards-${Date.now()}`)
       .on(
@@ -144,19 +138,19 @@ export default function AdminSupportCenterPage() {
         </div>
       ) : tab === 'advertiser_admin' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {inquiries.map((item) => {
+          {inquiries.map((item, index) => {
+            const itemKey = item.groupKey || item.id || `admin-inquiry-${index}`;
             const hasUnread = (unreadPerCard[item.groupKey] || 0) > 0;
             const advertiserName = item.chatUser?.full_name || 'Advertiser';
             const advertiserId = item.chatUser?.id;
 
             return (
               <div
-                key={item.groupKey}
+                key={itemKey}
                 className={`relative bg-slate-900 border ${
                   hasUnread ? 'border-rose-500/50 shadow-lg shadow-rose-500/10' : 'border-slate-800'
                 } rounded-2xl p-5 flex flex-col justify-between transition-all`}
               >
-                {/* Individual Card Notification Dot */}
                 {hasUnread && (
                   <div className="absolute top-4 right-4 flex items-center gap-1.5 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full">
                     <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
@@ -179,7 +173,7 @@ export default function AdminSupportCenterPage() {
 
                   <div className="text-xs text-slate-400 flex items-center gap-1 mb-3">
                     <MapPin className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Board: {item.spaces?.area}, {item.spaces?.city}</span>
+                    <span>Board: {item.spaces?.area || 'Location'}, {item.spaces?.city || ''}</span>
                   </div>
 
                   <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 mb-4 text-xs text-slate-300">
@@ -192,10 +186,11 @@ export default function AdminSupportCenterPage() {
                   onClick={() =>
                     setActiveChat({
                       spaceId: item.space_id,
-                      spaceTitle: `${item.spaces?.area}, ${item.spaces?.city}`,
+                      spaceTitle: `${item.spaces?.area || 'Billboard'}, ${item.spaces?.city || ''}`,
                       recipientId: advertiserId,
                       recipientName: advertiserName,
                       channelType: 'advertiser_admin',
+                      bookingId: item.booking_id || undefined,
                     })
                   }
                   className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition"
@@ -220,31 +215,35 @@ export default function AdminSupportCenterPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {inquiries.map((booking) => {
+                {inquiries.map((booking, index) => {
+                  const bookingRowKey = booking.id || `booking-row-${index}`;
                   const hasUnread = (unreadPerCard[booking.id] || 0) > 0;
+
                   return (
-                    <tr key={booking.id} className="hover:bg-slate-800/40 transition">
+                    <tr key={bookingRowKey} className="hover:bg-slate-800/40 transition">
                       <td className="p-4">
-                        <div className="font-semibold text-white">{booking.spaces?.area}, {booking.spaces?.city}</div>
-                        <div className="text-[10px] text-slate-400">{booking.campaign_name}</div>
+                        <div className="font-semibold text-white">
+                          {booking.spaces?.area || 'Board Space'}, {booking.spaces?.city || ''}
+                        </div>
+                        <div className="text-[10px] text-slate-400">{booking.campaign_name || `Booking #${String(bookingRowKey).slice(0, 8)}`}</div>
                       </td>
                       <td className="p-4 text-slate-300">
-                        <div>{booking.spaces?.profiles?.full_name}</div>
+                        <div>{booking.spaces?.profiles?.full_name || 'Billboard Owner'}</div>
                         <div className="text-[10px] text-slate-500">{booking.spaces?.profiles?.phone || 'No phone'}</div>
                       </td>
                       <td className="p-4 text-slate-300">
-                        <div>{booking.profiles?.full_name}</div>
+                        <div>{booking.profiles?.full_name || 'Advertiser'}</div>
                         <div className="text-[10px] text-slate-500">{booking.profiles?.phone || 'No phone'}</div>
                       </td>
                       <td className="p-4 text-slate-400">
-                        {booking.start_date} to {booking.end_date}
+                        {booking.duration_months ? `${booking.duration_months} Month(s)` : `${booking.start_date || 'N/A'} to ${booking.end_date || 'N/A'}`}
                       </td>
                       <td className="p-4">
                         <button
                           onClick={() =>
                             setActiveChat({
                               spaceId: booking.space_id,
-                              spaceTitle: `${booking.spaces?.area}, ${booking.spaces?.city}`,
+                              spaceTitle: `${booking.spaces?.area || 'Billboard'}, ${booking.spaces?.city || ''}`,
                               recipientId: booking.spaces?.profiles?.id,
                               recipientName: booking.spaces?.profiles?.full_name,
                               channelType: 'advertiser_owner',

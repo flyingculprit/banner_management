@@ -28,16 +28,23 @@ export default function SpaceChatModal({
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
-  const [resolvedRecipientId, setResolvedRecipientId] = useState<string | null>(recipientId || null);
-  const [resolvedRecipientName, setResolvedRecipientName] = useState<string | null>(recipientName || null);
+  const [resolvedRecipientId, setResolvedRecipientId] = useState<string | null>(
+    recipientId && recipientId !== 'admin' ? recipientId : null
+  );
+  const [resolvedRecipientName, setResolvedRecipientName] = useState<string | null>(
+    recipientName || null
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const buildConvoKey = useCallback(() => {
     if (channelType === 'owner_admin') {
       return `owner_admin_${spaceId}`;
     }
-    if (bookingId) {
-      return `adv_owner_booking_${bookingId}`;
+    if (channelType === 'advertiser_admin') {
+      return bookingId ? `adv_admin_booking_${bookingId}` : `adv_admin_${spaceId}`;
+    }
+    if (channelType === 'advertiser_owner') {
+      return bookingId ? `adv_owner_booking_${bookingId}` : `space_chat_${spaceId}`;
     }
     return `space_chat_${spaceId}`;
   }, [channelType, spaceId, bookingId]);
@@ -46,36 +53,78 @@ export default function SpaceChatModal({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+const markMessagesAsRead = useCallback(
+    async (convoKey: string) => {
+      if (!currentUser?.id) return;
+
+      // 1. Primary update matching specific conversation_key
+      await supabase
+        .from('space_chat_messages')
+        .update({ is_read: true })
+        .eq('conversation_key', convoKey)
+        .neq('sender_id', currentUser.id)
+        .eq('is_read', false);
+
+      // 2. Comprehensive update matching space_id and channel_type (handles both booking and non-booking threads)
+      if (spaceId && channelType) {
+        await supabase
+          .from('space_chat_messages')
+          .update({ is_read: true })
+          .eq('space_id', spaceId)
+          .eq('channel_type', channelType)
+          .neq('sender_id', currentUser.id)
+          .eq('is_read', false);
+      }
+    },
+    [currentUser?.id, spaceId, channelType]
+  );
+
   useEffect(() => {
+    if (!currentUser?.id) return;
+
     let isSubscribed = true;
     let channel: any = null;
 
     const setupChat = async () => {
       setLoading(true);
-      let targetId = recipientId;
+      let targetId = recipientId && recipientId !== 'admin' ? recipientId : null;
       let targetName = recipientName;
 
-      if (!targetId) {
-        if (channelType === 'owner_admin') {
-          const { data: spaceData } = await supabase
-            .from('spaces')
-            .select('owner_id, profiles:owner_id(full_name)')
-            .eq('id', spaceId)
-            .single();
+      // 1. Resolve Admin UUID if chatting with admin/support
+      if (channelType === 'advertiser_admin' || recipientId === 'admin') {
+        const { data: adminUser } = await supabase
+          .from('profiles')
+          .select('id, full_name')
+          .eq('role', 'admin')
+          .limit(1)
+          .maybeSingle();
 
-          if (currentUser.id === spaceData?.owner_id) {
-            const { data: adminUser } = await supabase
-              .from('profiles')
-              .select('id, full_name')
-              .eq('role', 'admin')
-              .limit(1)
-              .maybeSingle();
-            targetId = adminUser?.id;
-            targetName = adminUser?.full_name || 'Admin Support';
-          } else {
-            targetId = spaceData?.owner_id;
-            targetName = (spaceData?.profiles as any)?.full_name || 'Board Owner';
-          }
+        if (adminUser) {
+          targetId = adminUser.id;
+          targetName = adminUser.full_name || 'Platform Admin';
+        }
+      }
+      // 2. Resolve target ID for owner_admin conversations
+      else if (channelType === 'owner_admin') {
+        const { data: spaceData } = await supabase
+          .from('spaces')
+          .select('owner_id, profiles:owner_id(full_name)')
+          .eq('id', spaceId)
+          .single();
+
+        if (currentUser?.id === spaceData?.owner_id) {
+          const { data: adminUser } = await supabase
+            .from('profiles')
+            .select('id, full_name')
+            .eq('role', 'admin')
+            .limit(1)
+            .maybeSingle();
+
+          targetId = adminUser?.id || null;
+          targetName = adminUser?.full_name || 'Admin Support';
+        } else {
+          targetId = spaceData?.owner_id || null;
+          targetName = (spaceData?.profiles as any)?.full_name || 'Board Owner';
         }
       }
 
@@ -85,28 +134,31 @@ export default function SpaceChatModal({
 
       const convoKey = buildConvoKey();
 
-      const { data } = await supabase
+      // Fetch message history strictly isolated by channel_type
+      let query = supabase
         .from('space_chat_messages')
         .select('*, profiles:sender_id(full_name, role)')
-        .eq('conversation_key', convoKey)
-        .order('created_at', { ascending: true });
+        .eq('channel_type', channelType);
+
+      if (bookingId) {
+        query = query.or(`conversation_key.eq.${convoKey},booking_id.eq.${bookingId}`);
+      } else {
+        query = query.eq('conversation_key', convoKey);
+      }
+
+      const { data } = await query.order('created_at', { ascending: true });
 
       if (isSubscribed && data) {
         setMessages(data);
       }
 
-      // Mark unread messages as read upon modal launch
-      await supabase
-        .from('space_chat_messages')
-        .update({ is_read: true })
-        .eq('conversation_key', convoKey)
-        .neq('sender_id', currentUser.id)
-        .eq('is_read', false);
+      await markMessagesAsRead(convoKey);
 
       if (isSubscribed) setLoading(false);
       scrollToBottom();
 
-      const topic = `modal_${convoKey}_${Date.now()}`;
+      // Realtime listener isolated by conversation key and channel_type
+      const topic = `modal_${channelType}_${convoKey.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`;
       channel = supabase
         .channel(topic)
         .on(
@@ -115,9 +167,15 @@ export default function SpaceChatModal({
             event: 'INSERT',
             schema: 'public',
             table: 'space_chat_messages',
-            filter: `conversation_key=eq.${convoKey}`,
           },
           async (payload: any) => {
+            const isMatchChannel = payload.new.channel_type === channelType;
+            const isMatchConvo =
+              payload.new.conversation_key === convoKey ||
+              (bookingId && payload.new.booking_id === bookingId && isMatchChannel);
+
+            if (!isMatchChannel || !isMatchConvo) return;
+
             const { data: profile } = await supabase
               .from('profiles')
               .select('full_name, role')
@@ -125,11 +183,14 @@ export default function SpaceChatModal({
               .single();
 
             const incoming = { ...payload.new, profiles: profile };
-            if (isSubscribed) {
-              setMessages((prev) => [...prev, incoming]);
 
-              // Automatically mark as read if currently open in modal
-              if (payload.new.sender_id !== currentUser.id) {
+            if (isSubscribed) {
+              setMessages((prev) => {
+                if (prev.some((m) => m.id === incoming.id)) return prev;
+                return [...prev, incoming];
+              });
+
+              if (payload.new.sender_id !== currentUser?.id) {
                 await supabase
                   .from('space_chat_messages')
                   .update({ is_read: true })
@@ -150,7 +211,16 @@ export default function SpaceChatModal({
         supabase.removeChannel(channel);
       }
     };
-  }, [spaceId, channelType, bookingId, recipientId, currentUser.id, buildConvoKey]);
+  }, [
+    spaceId,
+    channelType,
+    bookingId,
+    recipientId,
+    currentUser?.id,
+    recipientName,
+    buildConvoKey,
+    markMessagesAsRead,
+  ]);
 
   useEffect(() => {
     scrollToBottom();
@@ -158,7 +228,19 @@ export default function SpaceChatModal({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessage.trim() || !currentUser) return;
+    if (!newMessage.trim() || !currentUser?.id) return;
+
+    let targetReceiverId = resolvedRecipientId;
+
+    if (!targetReceiverId || targetReceiverId === 'admin') {
+      const { data: adminUser } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1)
+        .maybeSingle();
+      targetReceiverId = adminUser?.id || null;
+    }
 
     const text = newMessage;
     setNewMessage('');
@@ -167,7 +249,7 @@ export default function SpaceChatModal({
     const { error } = await supabase.from('space_chat_messages').insert({
       space_id: spaceId,
       sender_id: currentUser.id,
-      receiver_id: resolvedRecipientId,
+      receiver_id: targetReceiverId,
       conversation_key: convoKey,
       message: text,
       channel_type: channelType,
@@ -197,7 +279,13 @@ export default function SpaceChatModal({
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">{spaceTitle}</p>
           </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white transition">
+          <button
+            onClick={async () => {
+              await markMessagesAsRead(buildConvoKey());
+              onClose();
+            }}
+            className="p-1 text-slate-400 hover:text-white transition"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -213,7 +301,7 @@ export default function SpaceChatModal({
             </div>
           ) : (
             messages.map((msg) => {
-              const isMe = msg.sender_id === currentUser.id;
+              const isMe = msg.sender_id === currentUser?.id;
               const senderRole = msg.profiles?.role || 'user';
               const senderName = isMe ? 'You' : msg.profiles?.full_name || 'User';
 
